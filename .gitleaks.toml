@@ -1,0 +1,13 @@
+title = "matchup-thumbs gitleaks config"
+
+[extend]
+# Use upstream default rules
+useDefault = true
+
+[[allowlists]]
+description = "allow .env.example placeholder values"
+paths = ['''\.env\.example$''']
+
+[[allowlists]]
+description = "allow test fixtures with fake secrets"
+paths = ['''tests/.*''']

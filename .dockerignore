@@ -1,0 +1,36 @@
+# Secrets — never bake into image layers
+.env
+
+# Git metadata
+.git
+.gitignore
+
+# Virtual environment (image uses its own venv via uv)
+.venv
+
+# Python bytecode
+__pycache__
+*.pyc
+*.pyo
+
+# Test / dev caches — not needed at runtime
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Coverage artifacts
+.coverage
+coverage.xml
+htmlcov
+
+# Planning and documentation artifacts
+.planning
+docs
+
+# CI / test code — not shipped in the image
+tests
+.github
+
+# Editor / OS artifacts
+.DS_Store
+*.swp
