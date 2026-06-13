@@ -1,13 +1,11 @@
-"""3-stage fail-fast, league-scoped team resolver.
+"""2-stage fail-fast, league-scoped team resolver.
 
 Given a raw user-supplied string and a target league, this module resolves
-the input to a canonical team record via three progressively looser stages:
+the input to a canonical team record via two progressively looser stages:
 
   Stage 1 — Exact match against ``team_aliases`` (normalized input matches alias
              exactly; league-scoped).
-  Stage 2 — Only when the input was changed by ``normalize_input`` (avoids a
-             redundant double-query); same exact SQL on the normalised form.
-  Stage 3 — pg_trgm trigram fuzzy match (``similarity > threshold``), ordered
+  Stage 2 — pg_trgm trigram fuzzy match (``similarity > threshold``), ordered
              by similarity descending, league-scoped.
 
 A positive result is cached in Redis under ``resolve:{league}:{norm}`` (7-day
@@ -222,15 +220,12 @@ async def resolve(
     row = await _query_exact(pool, league, norm)
 
     # ------------------------------------------------------------------
-    # Stage 2: exact match on the post-normalization form — only when
-    # normalize_input actually changed the input (Pitfall 6: avoid
-    # double-query when input is already normalized).
-    # ------------------------------------------------------------------
-    if row is None and norm != raw_input.casefold():
-        row = await _query_exact(pool, league, normalize_input(raw_input))
-
-    # ------------------------------------------------------------------
-    # Stage 3: trigram fuzzy match.
+    # Stage 2: trigram fuzzy match.
+    # (The former Stage 2 exact-match on casefolded input was a no-op:
+    # normalize_input already produces norm, so it issued the same SQL
+    # as Stage 1 and wasted a DB round-trip.  Aliases are always stored
+    # fully normalized via generate_aliases(), so no intermediate form
+    # can match that Stage 1 would miss.)
     # ------------------------------------------------------------------
     if row is None:
         row = await _query_trigram(pool, league, norm)
