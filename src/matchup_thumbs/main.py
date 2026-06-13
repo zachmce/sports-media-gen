@@ -19,17 +19,19 @@ logger = structlog.get_logger()
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage application lifespan: open/close DB pool and Redis client."""
     # Startup
+    # psycopg3 conninfo uses postgresql:// scheme; strip the SQLAlchemy +psycopg suffix
+    conninfo = str(settings.postgres_dsn).replace(
+        "postgresql+psycopg://", "postgresql://"
+    )
     pool = AsyncConnectionPool(
-        conninfo=str(settings.postgres_dsn),
+        conninfo=conninfo,
         min_size=2,
         max_size=10,
         open=False,
     )
     await pool.open()
 
-    redis_client = Redis.from_url(
-        str(settings.redis_url), decode_responses=False
-    )
+    redis_client = Redis.from_url(str(settings.redis_url), decode_responses=False)
 
     app.state.db_pool = pool
     app.state.redis = redis_client
