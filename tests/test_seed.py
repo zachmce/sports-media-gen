@@ -8,10 +8,11 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
+import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import psycopg
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -26,7 +27,6 @@ from matchup_thumbs.espn.models import ESPNLogo, ESPNTeamEntry
 from matchup_thumbs.seed import generate_aliases, normalize_input
 from tests.conftest import pg_required
 
-
 # ---------------------------------------------------------------------------
 # Task 1: fetch_teams — pytest-httpx mock against recorded NBA fixture
 # ---------------------------------------------------------------------------
@@ -37,8 +37,6 @@ async def test_fetch_teams_returns_lakers_first(
     espn_nba_fixture: dict[str, Any],
 ) -> None:
     """fetch_teams (mocked) returns Lakers as the first parsed team (ESPN-01)."""
-    import httpx
-
     league_slug = "nba"
     path, limit = LEAGUE_ENDPOINTS[league_slug]
     base_url = "https://site.api.espn.com"
@@ -58,8 +56,6 @@ async def test_fetch_teams_validates_schema(
     httpx_mock: HTTPXMock,
 ) -> None:
     """fetch_teams raises ValidationError on malformed ESPN response (ESPN-03)."""
-    import httpx
-
     import pydantic
 
     league_slug = "nba"
@@ -152,7 +148,7 @@ def test_fetch_logo_bytes_has_tenacity_retry() -> None:
 
 
 def test_normalize_input_casefolds_and_strips() -> None:
-    """normalize_input casefoldsand removes non-alphanumerics."""
+    """normalize_input casefolds and removes non-alphanumerics."""
     assert normalize_input("LA-Lakers") == "lalakers"
     assert normalize_input("lakerz") == "lakerz"
     assert normalize_input("LAL") == "lal"
@@ -165,7 +161,7 @@ def test_normalize_input_casefolds_and_strips() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_lakers_entry(nickname: str = "Los Angeles") -> ESPNTeamEntry:
+def _make_lakers_entry() -> ESPNTeamEntry:
     """Return a Lakers-like ESPNTeamEntry (nickname matches location)."""
     return ESPNTeamEntry(
         id="13",
@@ -251,8 +247,6 @@ async def test_seed_upsert_idempotent(espn_nba_fixture: dict[str, Any]) -> None:
     """
     import os
 
-    import httpx
-    import psycopg
     from psycopg_pool import AsyncConnectionPool
     from redis.asyncio import Redis
 
@@ -271,8 +265,10 @@ async def test_seed_upsert_idempotent(espn_nba_fixture: dict[str, Any]) -> None:
 
     # Seed with two fresh teams from the fixture.  Run twice; counts must be stable.
     try:
-        async with AsyncConnectionPool(conninfo=conninfo, min_size=1, max_size=2) as pool:
-            redis_client = Redis.from_url(redis_url, decode_responses=False)
+        async with AsyncConnectionPool(
+            conninfo=conninfo, min_size=1, max_size=2
+        ) as pool:
+            redis_client: Redis = Redis.from_url(redis_url, decode_responses=False)
             try:
                 transport = httpx.MockTransport(
                     handler=_make_espn_mock_handler(espn_url, espn_nba_fixture)
@@ -282,13 +278,13 @@ async def test_seed_upsert_idempotent(espn_nba_fixture: dict[str, Any]) -> None:
                     await seed_run(pool, redis_client, http_client, [league_slug])
                     counts_1 = await _count_nba_rows(pool)
 
-                    # Second run (idempotent)
-                    transport2 = httpx.MockTransport(
-                        handler=_make_espn_mock_handler(espn_url, espn_nba_fixture)
-                    )
-                    async with httpx.AsyncClient(transport=transport2) as http_client2:
-                        await seed_run(pool, redis_client, http_client2, [league_slug])
-                    counts_2 = await _count_nba_rows(pool)
+                transport2 = httpx.MockTransport(
+                    handler=_make_espn_mock_handler(espn_url, espn_nba_fixture)
+                )
+                # Second run (idempotent)
+                async with httpx.AsyncClient(transport=transport2) as http_client2:
+                    await seed_run(pool, redis_client, http_client2, [league_slug])
+                counts_2 = await _count_nba_rows(pool)
 
                 assert counts_1 == counts_2, (
                     f"Row counts changed after second seed run: "
@@ -298,29 +294,28 @@ async def test_seed_upsert_idempotent(espn_nba_fixture: dict[str, Any]) -> None:
                 await redis_client.aclose()
     finally:
         # Cleanup seeded teams
-        with psycopg.connect(raw_dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    DELETE FROM team_aliases
-                    WHERE team_id IN (
-                        SELECT t.id FROM teams t
-                        JOIN leagues l ON l.id = t.league_id
-                        WHERE l.slug = 'nba'
-                          AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
-                    )
-                    """
-                )
-                cur.execute(
-                    """
-                    DELETE FROM teams t
-                    USING leagues l
-                    WHERE l.id = t.league_id
-                      AND l.slug = 'nba'
+        with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM team_aliases
+                WHERE team_id IN (
+                    SELECT t.id FROM teams t
+                    JOIN leagues l ON l.id = t.league_id
+                    WHERE l.slug = 'nba'
                       AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
-                    """
                 )
-            conn.commit()
+                """
+            )
+            cur.execute(
+                """
+                DELETE FROM teams t
+                USING leagues l
+                WHERE l.id = t.league_id
+                  AND l.slug = 'nba'
+                  AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
+                """
+            )
+        # psycopg commit happens on context manager exit (no explicit commit needed)
 
 
 # ---------------------------------------------------------------------------
@@ -335,13 +330,11 @@ async def test_seed_degrade_no_truncate(
     """ESPN-05: when ESPN is unreachable, existing rows are preserved.
 
     Pre-seeds data via seeded_registry fixture, then mocks ESPN returning 503
-    and verifies the seed exits non-zero (SystemExit) but does NOT delete or
-    truncate any previously seeded team rows.
+    and verifies the seed exits non-zero (exception raised) but does NOT delete
+    or truncate any previously seeded team rows.
     """
     import os
 
-    import httpx
-    import psycopg
     from psycopg_pool import AsyncConnectionPool
     from redis.asyncio import Redis
 
@@ -352,19 +345,18 @@ async def test_seed_degrade_no_truncate(
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
     # Verify pre-existing rows (from seeded_registry)
-    with psycopg.connect(raw_dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM teams t
-                JOIN leagues l ON l.id = t.league_id
-                WHERE l.slug = 'nba'
-                  AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
-                """
-            )
-            row = cur.fetchone()
-            assert row is not None
-            pre_count: int = row[0]
+    with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM teams t
+            JOIN leagues l ON l.id = t.league_id
+            WHERE l.slug = 'nba'
+              AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
+            """
+        )
+        pre_row = cur.fetchone()
+        assert pre_row is not None
+        pre_count: int = pre_row[0]
     assert pre_count > 0, "seeded_registry must have inserted teams before this test"
 
     conninfo = raw_dsn
@@ -374,29 +366,28 @@ async def test_seed_degrade_no_truncate(
         return httpx.Response(503, content=b"Service Unavailable")
 
     async with AsyncConnectionPool(conninfo=conninfo, min_size=1, max_size=2) as pool:
-        redis_client = Redis.from_url(redis_url, decode_responses=False)
+        redis_client: Redis = Redis.from_url(redis_url, decode_responses=False)
         try:
             transport = httpx.MockTransport(handler=espn_503_handler)
             async with httpx.AsyncClient(transport=transport) as http_client:
-                with pytest.raises(Exception):  # ESPN failure propagates
+                with pytest.raises(httpx.HTTPStatusError):
                     await seed_run(pool, redis_client, http_client, ["nba"])
         finally:
             await redis_client.aclose()
 
     # Verify existing rows were NOT touched
-    with psycopg.connect(raw_dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM teams t
-                JOIN leagues l ON l.id = t.league_id
-                WHERE l.slug = 'nba'
-                  AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
-                """
-            )
-            row = cur.fetchone()
-            assert row is not None
-            post_count: int = row[0]
+    with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM teams t
+            JOIN leagues l ON l.id = t.league_id
+            WHERE l.slug = 'nba'
+              AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
+            """
+        )
+        post_row = cur.fetchone()
+        assert post_row is not None
+        post_count: int = post_row[0]
     assert post_count == pre_count, (
         f"ESPN failure must not mutate existing rows: {pre_count} → {post_count}"
     )
@@ -412,13 +403,12 @@ def _make_espn_mock_handler(
     fixture: dict[str, Any],
 ) -> Any:
     """Return an httpx mock transport handler that responds with the fixture JSON."""
-    import json as _json
 
     def handler(request: httpx.Request) -> httpx.Response:
         if str(request.url) == expected_url:
             return httpx.Response(
                 200,
-                content=_json.dumps(fixture).encode(),
+                content=json.dumps(fixture).encode(),
                 headers={"content-type": "application/json"},
             )
         return httpx.Response(404)
@@ -428,9 +418,7 @@ def _make_espn_mock_handler(
 
 async def _count_nba_rows(pool: Any) -> tuple[int, int]:
     """Return (team_count, alias_count) for NBA teams from the fixture."""
-    import psycopg
     from psycopg import rows as pg_rows
-    from psycopg_pool import AsyncConnectionPool
 
     async with pool.connection() as conn:
         conn.row_factory = pg_rows.tuple_row

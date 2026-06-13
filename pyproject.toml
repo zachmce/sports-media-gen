@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 api = "matchup_thumbs.main:main"
+seed = "matchup_thumbs.seed:main"
 
 [dependency-groups]
 dev = [
