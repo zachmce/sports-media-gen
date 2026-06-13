@@ -209,28 +209,20 @@ def test_alias_generation_skips_nickname() -> None:
 
 
 def test_logo_fallback() -> None:
-    """ESPN-02: when ESPN returns no usable logo, placeholder bytes are returned.
+    """ESPN-02: placeholder bytes are non-empty valid PNG bytes.
 
-    The D-10 fallback chain terminates at get_placeholder_logo() when logos=[].
-    Validates that the placeholder bytes are non-empty PNG bytes.
+    The D-10 fallback chain terminates at get_placeholder_logo() when a team
+    has no usable logos.  This test validates the placeholder itself is a
+    well-formed PNG so the fallback path never returns corrupt bytes.
+
+    Note: _pick_logo_bytes_sync was removed (WR-06) — it always returned the
+    placeholder regardless of logos, making it indistinguishable from calling
+    get_placeholder_logo() directly.  The async fallback chain lives in
+    _resolve_logo_bytes() inside seed.run().
     """
-    from matchup_thumbs.seed import _pick_logo_bytes_sync
-
-    team = ESPNTeamEntry(
-        id="999",
-        slug="no-logo-team",
-        abbreviation="NLT",
-        displayName="No Logo Team",
-        shortDisplayName="NoLogo",
-        name="No Logo",
-        location="Nowhere",
-        logos=[],  # empty → placeholder fallback
-    )
-
-    logo_bytes = _pick_logo_bytes_sync(team)
-    expected = get_placeholder_logo()
-    assert logo_bytes == expected
-    assert logo_bytes[:4] == b"\x89PNG", "Placeholder must be valid PNG bytes"
+    placeholder = get_placeholder_logo()
+    assert placeholder, "Placeholder bytes must be non-empty"
+    assert placeholder[:4] == b"\x89PNG", "Placeholder must be valid PNG bytes"
 
 
 # ---------------------------------------------------------------------------

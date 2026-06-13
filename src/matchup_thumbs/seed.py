@@ -116,25 +116,6 @@ def generate_aliases(team: ESPNTeamEntry) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Logo selection (sync helper for testability + seed.run's async usage)
-# ---------------------------------------------------------------------------
-
-
-def _pick_logo_bytes_sync(team: ESPNTeamEntry) -> bytes:
-    """Return the placeholder bytes if the team has no logos (unit-test helper).
-
-    For the full async fallback chain (CDN fetch + placeholder fallback) see
-    ``_resolve_logo_bytes`` in ``run()``.  This synchronous helper is exposed
-    for unit tests that do not need a live httpx client.
-    """
-    url = select_logo_url(team.logos)
-    if url is None:
-        return get_placeholder_logo()
-    # Synchronous path only returns placeholder — full fetch is in the async path
-    return get_placeholder_logo()
-
-
-# ---------------------------------------------------------------------------
 # Core async seed runner
 # ---------------------------------------------------------------------------
 
