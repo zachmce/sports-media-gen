@@ -39,6 +39,21 @@ services:
         condition: service_healthy
     restart: "no"
 
+  seed:
+    build: .
+    command: ["python", "-m", "matchup_thumbs.seed"]
+    environment:
+      POSTGRES_DSN: "postgresql+psycopg://${POSTGRES_USER:-matchup}:${POSTGRES_PASSWORD:-matchup}@postgres:5432/${POSTGRES_DB:-matchup}"
+      REDIS_URL: "redis://redis:6379/0"
+      SEED_LEAGUES: "${SEED_LEAGUES:-nba,nfl,mlb,nhl,ncaaf,ncaab}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: "no"
+    profiles: ["seed"]
+
   api:
     build: .
     ports:
