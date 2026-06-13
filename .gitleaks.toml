@@ -9,5 +9,8 @@ description = "allow .env.example placeholder values"
 paths = ['''\.env\.example$''']
 
 [[allowlists]]
-description = "allow test fixtures with fake secrets"
-paths = ['''tests/.*''']
+description = "allow test fixture placeholder credentials (conftest and fixtures dir only)"
+paths = [
+    '''tests/conftest\.py$''',
+    '''tests/fixtures/.*''',
+]
