@@ -35,7 +35,7 @@ _NBA_TEAM_ROWS: list[dict[str, Any]] = [
         "slug": "los-angeles-clippers",
         "display_name": "Los Angeles Clippers",
         "abbreviation": "LAC",
-        "aliases": ["lac", "losangelescippers"],
+        "aliases": ["lac", "losangelesclippers"],
     },
     {
         "slug": "los-angeles-lakers",
