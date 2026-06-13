@@ -1,0 +1,74 @@
+name: CI
+
+# Default to no permissions; grant per-job minimum
+permissions: {}
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          python-version: "3.14"
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests migrations
+      - run: uv run ruff format --check src tests migrations
+
+  typecheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          python-version: "3.14"
+      - run: uv sync --frozen
+      - run: uv run mypy --strict src/matchup_thumbs migrations
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17.10
+        env:
+          POSTGRES_USER: matchup
+          POSTGRES_PASSWORD: matchup
+          POSTGRES_DB: matchup_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7.4.9-bookworm
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          python-version: "3.14"
+      - run: uv sync --frozen
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+        env:
+          POSTGRES_DSN: postgresql+psycopg://matchup:matchup@localhost:5432/matchup_test
+      - name: Run tests
+        run: uv run pytest --cov=src/matchup_thumbs --cov-report=xml
+        env:
+          POSTGRES_DSN: postgresql+psycopg://matchup:matchup@localhost:5432/matchup_test
+          REDIS_URL: redis://localhost:6379/0
