@@ -202,8 +202,12 @@ async def run(
         )
 
         for team in active_teams:
-            primary_color = f"#{team.color}" if team.color else None
-            secondary_color = f"#{team.alternateColor}" if team.alternateColor else None
+            # Strip any leading '#' ESPN may include before prepending exactly
+            # one '#', preventing '##XXXXXX' double-prefix in the database (WR-04).
+            primary_color = f"#{team.color.lstrip('#')}" if team.color else None
+            secondary_color = (
+                f"#{team.alternateColor.lstrip('#')}" if team.alternateColor else None
+            )
             logo_url = select_logo_url(team.logos)
 
             # --- Team upsert (D-03 idempotent, keyed on (league_id, slug)) ---
