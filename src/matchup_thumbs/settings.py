@@ -18,5 +18,20 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     render_version: int = 1
 
+    # ESPN integration
+    espn_base_url: str = "https://site.api.espn.com"
+    espn_request_timeout: float = 10.0
+    espn_semaphore_size: int = 5  # D-08: conservative starting point
+    espn_jitter_max: float = 0.5  # seconds; random delay between CDN logo fetches
+
+    # Seed behaviour
+    seed_leagues: str = "nba,nfl,mlb,nhl,ncaaf,ncaab"  # comma-separated; all by default
+    logo_cache_ttl: int = 30 * 24 * 3600  # 30 days in seconds
+
+    # Resolver
+    resolve_similarity_threshold: float = 0.5  # D-13
+    resolve_positive_ttl: int = 7 * 24 * 3600  # 7 days (RES-05)
+    resolve_negative_ttl: int = 5 * 60  # 5 minutes (D-14)
+
 
 settings = Settings()
