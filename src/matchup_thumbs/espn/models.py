@@ -16,7 +16,7 @@ Forward-compat trade-off: fail loudly on the fields we read, tolerate fields
 we do not.  Full Python 3.14 ``X | None`` union syntax throughout.
 """
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ESPNLogo(BaseModel):
@@ -78,7 +78,11 @@ class ESPNSport(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    leagues: list[ESPNLeague]
+    # min_length=1: an empty leagues array raises ValidationError at parse time
+    # (D-07 fail-loudly) rather than propagating an IndexError when seed accesses
+    # leagues[0].  The teams list on ESPNLeague is left unconstrained — a league
+    # may legitimately have zero active teams.
+    leagues: list[ESPNLeague] = Field(..., min_length=1)
 
 
 class ESPNTeamsResponse(BaseModel):
@@ -93,4 +97,6 @@ class ESPNTeamsResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    sports: list[ESPNSport]
+    # min_length=1: an empty sports array raises ValidationError at parse time
+    # (D-07 fail-loudly) rather than an IndexError at sports[0] in the seed.
+    sports: list[ESPNSport] = Field(..., min_length=1)

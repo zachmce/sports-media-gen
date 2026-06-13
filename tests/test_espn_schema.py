@@ -44,6 +44,27 @@ def test_espn_schema_drift_fails() -> None:
         ESPNTeamsResponse.model_validate(malformed)
 
 
+def test_espn_schema_empty_sports_raises_validation_error() -> None:
+    """CR-01: empty sports array raises ValidationError at parse time (D-07).
+
+    ESPNTeamsResponse.sports has min_length=1.  ESPN returning ``{"sports": []}``
+    must raise pydantic.ValidationError rather than propagating an IndexError
+    when seed code accesses sports[0].
+    """
+    with pytest.raises(pydantic.ValidationError):
+        ESPNTeamsResponse.model_validate({"sports": []})
+
+
+def test_espn_schema_empty_leagues_raises_validation_error() -> None:
+    """CR-01: empty leagues array raises ValidationError at parse time (D-07).
+
+    ESPNSport.leagues has min_length=1.  ESPN returning a sport with no leagues
+    must raise pydantic.ValidationError rather than an IndexError at leagues[0].
+    """
+    with pytest.raises(pydantic.ValidationError):
+        ESPNTeamsResponse.model_validate({"sports": [{"leagues": []}]})
+
+
 def test_espn_schema_extra_fields_ignored() -> None:
     """ESPN-03 forward-compat: unknown extra fields on a well-formed team are tolerated.
 
