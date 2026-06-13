@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "matchup-thumbs"
+version = "0.1.0"
+description = "Sports matchup image generator"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi==0.136.3",
+    "uvicorn==0.49.0",
+    "gunicorn==26.0.0",
+    "pillow==12.2.0",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.1",
+    "psycopg[binary]==3.3.4",
+    "psycopg-pool==3.3.1",
+    "alembic==1.18.4",
+    "redis==8.0.0",
+    "structlog==26.1.0",
+    "httpx==0.28.1",
+    "anyio==4.13.0",
+]
+
+[project.scripts]
+api = "matchup_thumbs.main:main"
+
+[dependency-groups]
+dev = [
+    "ruff==0.15.17",
+    "mypy==2.1.0",
+    "pytest==9.1.0",
+    "pytest-asyncio==1.4.0",
+    "pytest-httpx==0.36.2",
+    "pytest-cov==7.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/matchup_thumbs"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--cov=src/matchup_thumbs --cov-report=term-missing"
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+files = ["src/matchup_thumbs", "migrations", "tests"]
+
+[tool.ruff]
+src = ["src"]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
