@@ -242,7 +242,12 @@ async def run(
                         },
                     )
                     team_row = await cur.fetchone()
-                    assert team_row is not None
+                    if team_row is None:
+                        raise RuntimeError(
+                            f"INSERT ... RETURNING id returned no row for team "
+                            f"{team.slug!r} in league {league_slug!r}. "
+                            "This should never happen — check DB constraints."
+                        )
                     team_id: int = team_row[0]
 
                 # --- Alias upsert (D-11 / D-12) ---
