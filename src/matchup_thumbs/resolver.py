@@ -19,8 +19,9 @@ A negative result (total miss) is cached under ``resolve_miss:{league}:{norm}``
 Security
 --------
 - T-02-08: All SQL uses ``%s`` positional parameters — never f-string SQL.
-- T-02-09: Input longer than 100 characters is rejected before normalisation;
-  negative cache then short-circuits repeated junk scans.
+- T-02-09: Input longer than 100 characters is rejected before normalisation
+  with an early return (no Redis write needed; the branch never reaches the
+  trigram stage).
 - T-02-10: Input is normalised (alphanumerics only) before keying into Redis;
   every key is also scoped by league slug.
 - T-02-11: Every SQL stage filters by ``league_id`` sub-select; cross-league
@@ -178,14 +179,16 @@ async def resolve(
         Full team-row dict or None.
     """
     # T-02-09: reject overlong input before normalization to bound trigram cost.
+    # The early return is sufficient — no negative cache write is needed because
+    # the overlong branch never reaches the trigram stage anyway.  Writing a
+    # miss key with raw (unnormalized) bytes would pollute the keyspace and is
+    # never read on subsequent calls (which re-enter this branch immediately).
     if len(raw_input) > _MAX_INPUT_LEN:
         await logger.awarning(
             "resolver_input_too_long",
             league=league,
             length=len(raw_input),
         )
-        miss_key_long = f"resolve_miss:{league}:{raw_input[:_MAX_INPUT_LEN]}".encode()
-        await redis.set(miss_key_long, b"miss", ex=settings.resolve_negative_ttl)
         return None
 
     norm = normalize_input(raw_input)
