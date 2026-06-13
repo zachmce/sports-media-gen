@@ -37,7 +37,7 @@ from psycopg import rows as pg_rows
 from psycopg_pool import AsyncConnectionPool
 from redis.asyncio import Redis
 
-from .seed import normalize_input
+from .seed import KNOWN_LEAGUES, normalize_input
 from .settings import settings
 
 logger = structlog.get_logger()
@@ -160,7 +160,8 @@ async def resolve(
     """Resolve raw user input to a canonical team dict, league-scoped.
 
     Return contract (locked — Phase 4 consumers depend on this shape):
-        None — total miss (all three stages exhausted + negative cache set).
+        None — total miss (both stages exhausted + negative cache set),
+               or league not in KNOWN_LEAGUES.
         dict — full team row with keys:
             id, league_id, slug, display_name, abbreviation,
             primary_color, secondary_color, logo_url, espn_id.
@@ -170,7 +171,7 @@ async def resolve(
 
     Args:
         league:    League slug (e.g. ``"nba"``), used for league-scope filters
-                   and Redis key construction.
+                   and Redis key construction.  Must be in ``KNOWN_LEAGUES``.
         raw_input: Raw user-supplied string (e.g. ``"lakerz"``).
         pool:      Async psycopg3 connection pool.
         redis:     Async Redis client (``decode_responses=False``).
@@ -178,6 +179,13 @@ async def resolve(
     Returns:
         Full team-row dict or None.
     """
+    # Validate league against the fixed six-slug set (WR-03 / T-02-10).
+    # Prevents arbitrary strings from polluting Redis key-space and ensures
+    # Phase 4 route parameters are never forwarded unchecked.
+    if league not in KNOWN_LEAGUES:
+        await logger.awarning("resolver_unknown_league", league=league)
+        return None
+
     # T-02-09: reject overlong input before normalization to bound trigram cost.
     # The early return is sufficient — no negative cache write is needed because
     # the overlong branch never reaches the trigram stage anyway.  Writing a
