@@ -51,9 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await pool.open()
         stack.push_async_callback(pool.close)
 
-        redis_client: Redis[bytes] = Redis.from_url(
-            str(settings.redis_url), decode_responses=False
-        )
+        redis_client = Redis.from_url(str(settings.redis_url), decode_responses=False)
         stack.push_async_callback(redis_client.aclose)
 
         app.state.db_pool = pool

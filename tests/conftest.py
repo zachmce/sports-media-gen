@@ -58,7 +58,7 @@ def client() -> Generator[TestClient]:
     DB-integration tests are gated separately in ``test_migrations.py``.
     """
     original_lifespan = app.router.lifespan_context
-    app.router.lifespan_context = _stub_lifespan  # type: ignore[assignment]
+    app.router.lifespan_context = _stub_lifespan
     try:
         with TestClient(app) as c:
             yield c
