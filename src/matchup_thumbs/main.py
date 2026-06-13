@@ -4,13 +4,14 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
+import httpx
 import structlog
 import uvicorn
 from fastapi import FastAPI
 from psycopg_pool import AsyncConnectionPool
 from redis.asyncio import Redis
 
-from .routes import health
+from .routes import health, leagues
 from .settings import settings
 
 structlog.configure(
@@ -54,8 +55,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis_client = Redis.from_url(str(settings.redis_url), decode_responses=False)
         stack.push_async_callback(redis_client.aclose)
 
+        http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.espn_request_timeout),
+            transport=httpx.AsyncHTTPTransport(retries=2),
+            follow_redirects=True,
+        )
+        stack.push_async_callback(http_client.aclose)
+
         app.state.db_pool = pool
         app.state.redis = redis_client
+        app.state.http_client = http_client
 
         await logger.ainfo(
             "startup complete",
@@ -69,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="matchup-thumbs", lifespan=lifespan)
 app.include_router(health.router)
+app.include_router(leagues.router)
 
 
 def main() -> None:
