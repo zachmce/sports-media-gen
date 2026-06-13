@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     )
     redis_url: RedisDsn = RedisDsn("redis://localhost:6379/0")
 
+    db_pool_min_size: int = 2
+    db_pool_max_size: int = 10
+
     log_level: str = "INFO"
     render_version: int = 1
 
