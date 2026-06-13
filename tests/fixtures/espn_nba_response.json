@@ -1,0 +1,59 @@
+{
+  "sports": [
+    {
+      "leagues": [
+        {
+          "teams": [
+            {
+              "team": {
+                "id": "13",
+                "slug": "los-angeles-lakers",
+                "abbreviation": "LAL",
+                "displayName": "Los Angeles Lakers",
+                "shortDisplayName": "Lakers",
+                "name": "Lakers",
+                "location": "Los Angeles",
+                "color": "552583",
+                "alternateColor": "fdb927",
+                "isActive": true,
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/nba/500/lal.png",
+                    "rel": ["full", "default"],
+                    "width": 500
+                  },
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/nba/500-dark/lal.png",
+                    "rel": ["full", "dark"],
+                    "width": 500
+                  }
+                ]
+              }
+            },
+            {
+              "team": {
+                "id": "12",
+                "slug": "los-angeles-clippers",
+                "abbreviation": "LAC",
+                "displayName": "Los Angeles Clippers",
+                "shortDisplayName": "Clippers",
+                "name": "Clippers",
+                "location": "Los Angeles",
+                "color": "c8102e",
+                "alternateColor": "1d428a",
+                "isActive": true,
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/nba/500/lac.png",
+                    "rel": ["full", "default"],
+                    "width": 500
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
