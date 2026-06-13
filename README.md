@@ -22,3 +22,7 @@ uv run pytest
 uv run ruff check src tests
 uv run mypy --strict src/matchup_thumbs
 ```
+
+## Legal
+
+See [LICENSE](LICENSE) (MIT) and [DISCLAIMER.md](DISCLAIMER.md) for trademark attribution and ESPN sourcing notes.
