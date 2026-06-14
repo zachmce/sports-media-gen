@@ -627,9 +627,7 @@ async def test_singleflight_degrade_writes_cache() -> None:
 
     # WR-01: verify at least one redis.set call used ex=render_cache_ttl
     # (the degraded cache-populate write).
-    cache_writes = [
-        c for c in redis.set.call_args_list if c.kwargs.get("ex") == 60
-    ]
+    cache_writes = [c for c in redis.set.call_args_list if c.kwargs.get("ex") == 60]
     assert len(cache_writes) >= 1, (
         "Degraded path must write rendered bytes to the render cache (WR-01)"
     )

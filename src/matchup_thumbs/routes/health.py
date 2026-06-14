@@ -40,9 +40,10 @@ async def readyz(request: Request) -> JSONResponse:
 
     async def check_postgres() -> bool:
         try:
-            async with pool.connection(
-                timeout=settings.readyz_check_timeout
-            ) as conn, conn.cursor() as cur:
+            async with (
+                pool.connection(timeout=settings.readyz_check_timeout) as conn,
+                conn.cursor() as cur,
+            ):
                 await cur.execute("SELECT 1")
             return True
         except Exception as exc:

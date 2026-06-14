@@ -8,6 +8,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call: {}  # enable reuse from publish.yml
 
 jobs:
   lint:
@@ -20,8 +21,8 @@ jobs:
         with:
           python-version: "3.14"
       - run: uv sync --frozen
-      - run: uv run ruff check src tests migrations
-      - run: uv run ruff format --check src tests migrations
+      - run: uv run ruff check src tests migrations scripts
+      - run: uv run ruff format --check src tests migrations scripts
 
   typecheck:
     runs-on: ubuntu-latest
@@ -33,7 +34,7 @@ jobs:
         with:
           python-version: "3.14"
       - run: uv sync --frozen
-      - run: uv run mypy --strict src/matchup_thumbs migrations
+      - run: uv run mypy --strict src/matchup_thumbs migrations scripts
 
   test:
     runs-on: ubuntu-latest

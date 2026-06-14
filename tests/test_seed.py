@@ -279,8 +279,7 @@ async def test_seed_upsert_idempotent(espn_nba_fixture: dict[str, Any]) -> None:
                 counts_2 = await _count_nba_rows(pool)
 
                 assert counts_1 == counts_2, (
-                    f"Row counts changed after second seed run: "
-                    f"{counts_1} → {counts_2}"
+                    f"Row counts changed after second seed run: {counts_1} → {counts_2}"
                 )
             finally:
                 await redis_client.aclose()

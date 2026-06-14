@@ -60,9 +60,7 @@ async def list_teams(league: str, request: Request) -> list[TeamResponse]:
         conn.row_factory = pg_rows.dict_row
         async with conn.cursor() as cur:
             # Validate league exists — parameterized (T-02-12)
-            await cur.execute(
-                "SELECT id FROM leagues WHERE slug = %s", (league,)
-            )
+            await cur.execute("SELECT id FROM leagues WHERE slug = %s", (league,))
             if await cur.fetchone() is None:
                 raise HTTPException(
                     status_code=404,

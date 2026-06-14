@@ -82,9 +82,7 @@ def both_resolve_lakers_celtics(hit_result: RenderResult) -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_image_route_200(
-    client: TestClient, both_resolve_lakers_celtics: None
-) -> None:
+def test_image_route_200(client: TestClient, both_resolve_lakers_celtics: None) -> None:
     """GET /{league}/{away}/{home}/{kind} returns 200 PNG (API-01)."""
     resp = client.get("/nba/lakers/celtics/thumb")
     assert resp.status_code == 200

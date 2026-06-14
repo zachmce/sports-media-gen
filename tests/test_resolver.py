@@ -251,17 +251,19 @@ async def test_resolver_cache(
 # Helper: assert the locked return-contract shape (WARNING 5)
 # ---------------------------------------------------------------------------
 
-_EXPECTED_KEYS = frozenset({
-    "id",
-    "league_id",
-    "slug",
-    "display_name",
-    "abbreviation",
-    "primary_color",
-    "secondary_color",
-    "logo_url",
-    "espn_id",
-})
+_EXPECTED_KEYS = frozenset(
+    {
+        "id",
+        "league_id",
+        "slug",
+        "display_name",
+        "abbreviation",
+        "primary_color",
+        "secondary_color",
+        "logo_url",
+        "espn_id",
+    }
+)
 
 
 def _assert_full_row_shape(row: dict) -> None:  # type: ignore[type-arg]

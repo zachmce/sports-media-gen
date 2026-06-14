@@ -12,18 +12,16 @@ import pytest
 # Add scripts directory to path so we can import the converter module
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 
-import pip_audit_to_sarif  # noqa: E402
+import pip_audit_to_sarif  # noqa: E402  # isort: skip
 
 
-FIXTURE_PATH = (
-    pathlib.Path(__file__).parent / "fixtures" / "pip_audit_sample.json"
-)
+FIXTURE_PATH = pathlib.Path(__file__).parent / "fixtures" / "pip_audit_sample.json"
 
 
 def test_convert_produces_valid_sarif_version_and_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Convert with one vuln: SARIF version is 2.1.0, tool name is pip-audit, one result."""
+    """Convert with one vuln: SARIF 2.1.0, tool name pip-audit, one result."""
     captured = io.StringIO()
     monkeypatch.setattr("sys.stdout", captured)
 

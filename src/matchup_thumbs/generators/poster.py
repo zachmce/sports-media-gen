@@ -71,8 +71,8 @@ def generate_poster_style0(
     # Away logo: centred in upper band  (D-06: away first/top)
     # Home logo: centred in lower band
     for logo_img, cy in [
-        (assets["away_logo"], _BAND_H // 2),          # away — upper band centre
-        (assets["home_logo"], _BAND_H + _BAND_H // 2), # home — lower band centre
+        (assets["away_logo"], _BAND_H // 2),  # away — upper band centre
+        (assets["home_logo"], _BAND_H + _BAND_H // 2),  # home — lower band centre
     ]:
         # Defensive .convert("RGBA") handles RGB-mode ESPN logos (T-03-07 / Pitfall 2)
         logo_rgba = logo_img.convert("RGBA").resize(

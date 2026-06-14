@@ -56,7 +56,7 @@ filterwarnings = [
 [tool.mypy]
 strict = true
 python_version = "3.14"
-files = ["src/matchup_thumbs", "migrations", "tests"]
+files = ["src/matchup_thumbs", "migrations", "tests", "scripts"]
 
 [tool.ruff]
 src = ["src"]

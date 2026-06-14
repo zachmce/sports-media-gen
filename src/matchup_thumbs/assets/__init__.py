@@ -23,9 +23,7 @@ def get_placeholder_logo() -> bytes:
 # The bytes are reused across all _load_font() calls; each call wraps them
 # in a new BytesIO because FreeType seeks the stream.
 _FONT_BYTES: bytes = (
-    files("matchup_thumbs.assets")
-    .joinpath("BarlowCondensed-Bold.ttf")
-    .read_bytes()
+    files("matchup_thumbs.assets").joinpath("BarlowCondensed-Bold.ttf").read_bytes()
 )
 
 

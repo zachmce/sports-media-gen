@@ -55,8 +55,8 @@ def generate_logo_style0(
     half_w = _LOGO_W // 2  # 400
 
     for logo_img, panel_cx, cy in [
-        (assets["away_logo"], half_w // 2, _LOGO_H // 2),          # away left
-        (assets["home_logo"], half_w + half_w // 2, _LOGO_H // 2), # home right
+        (assets["away_logo"], half_w // 2, _LOGO_H // 2),  # away left
+        (assets["home_logo"], half_w + half_w // 2, _LOGO_H // 2),  # home right
     ]:
         # Defensive .convert("RGBA") handles RGB-mode ESPN logos (T-03-07 / Pitfall 2)
         logo_rgba = logo_img.convert("RGBA").resize(

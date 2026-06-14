@@ -320,8 +320,7 @@ async def _amain(argv: list[str] | None = None) -> None:
         "--leagues",
         default=settings.seed_leagues,
         help=(
-            "Comma-separated league slugs to seed "
-            f"(default: {settings.seed_leagues!r})"
+            f"Comma-separated league slugs to seed (default: {settings.seed_leagues!r})"
         ),
     )
     parsed = parser.parse_args(argv)
@@ -355,7 +354,7 @@ def main() -> None:
     """
     try:
         asyncio.run(_amain())
-    except (SystemExit, KeyboardInterrupt):
+    except SystemExit, KeyboardInterrupt:
         raise
     except Exception as exc:
         # Log the failure and exit non-zero (ESPN-05 / D-15)

@@ -146,8 +146,7 @@ def test_null_color_fallback() -> None:
     # We sample the very first pixel which is always in the away colour band.
     top_left_pixel = img.getpixel((0, 0))
     assert top_left_pixel[:3] == _NULL_PRIMARY, (
-        f"Expected grey fallback {_NULL_PRIMARY!r} at (0,0), "
-        f"got {top_left_pixel!r}"
+        f"Expected grey fallback {_NULL_PRIMARY!r} at (0,0), got {top_left_pixel!r}"
     )
 
 

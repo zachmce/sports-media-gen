@@ -92,9 +92,9 @@ app = FastAPI(title="matchup-thumbs", lifespan=lifespan)
 # Note for Phase 5: /metrics must NOT be rate-limited in the nginx config
 # (proxy_cache zone excludes /metrics alongside /healthz and /readyz).
 instrumentator = Instrumentator(
-    should_group_status_codes=False,       # keep 200/404/400/503 distinct
-    should_ignore_untemplated=True,        # skip metrics for unknown-path 404s
-    excluded_handlers=["/metrics"],        # don't record the scrape endpoint itself
+    should_group_status_codes=False,  # keep 200/404/400/503 distinct
+    should_ignore_untemplated=True,  # skip metrics for unknown-path 404s
+    excluded_handlers=["/metrics"],  # don't record the scrape endpoint itself
 )
 instrumentator.instrument(app).expose(app, include_in_schema=False)
 
