@@ -1,0 +1,155 @@
+# Source: D-01 through D-12 from 06-CONTEXT.md; SHAs verified via gh api (06-RESEARCH.md)
+name: Publish
+
+# Default to no permissions; grant per-job minimum
+permissions: {}
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  scan-secret:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      # Full history required so gitleaks scans all commits (Pitfall 1)
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          fetch-depth: 0
+      # Do NOT set GITLEAKS_LICENSE — personal repo, no key needed (Pitfall 7)
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  scan-deps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          python-version: "3.14"
+      # Pitfall 6: capture exit code without aborting job — SARIF must upload first
+      - name: Run pip-audit
+        id: pip-audit
+        continue-on-error: true
+        run: |
+          uv export --frozen --no-dev --no-hashes \
+            | grep -v '^#' \
+            | uvx pip-audit -r /dev/stdin --no-deps -f json --output pip-audit.json
+      - name: Convert to SARIF
+        if: always()
+        run: python3 scripts/pip_audit_to_sarif.py pip-audit.json > pip-audit.sarif
+      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        if: always()
+        with:
+          sarif_file: pip-audit.sarif
+      # Gate: fail the job if pip-audit found vulnerabilities (after SARIF is uploaded)
+      - name: Gate on pip-audit result
+        if: steps.pip-audit.outcome == 'failure'
+        run: |
+          echo "pip-audit found vulnerabilities; see the Security tab for details"
+          exit 1
+
+  build-scan-push:
+    runs-on: ubuntu-latest
+    needs: [ci, scan-secret, scan-deps]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      # arm64 emulation via QEMU binfmt_misc (CI-02)
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3  # v4.1.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+
+      # Authenticate to GHCR with built-in GITHUB_TOKEN — no PAT (D-10)
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive OCI tags + labels from git ref (D-09)
+      - uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=edge,branch=main
+            type=sha,prefix=sha-,format=short,branch=main
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+          labels: |
+            org.opencontainers.image.title=matchup-thumbs
+            org.opencontainers.image.description=Sports matchup image generator
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      # Pass 1: build amd64 only, load locally for scanning (D-06, Pitfall 2)
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ghcr.io/${{ github.repository }}:scan-gate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Trivy scan against locally-loaded amd64 image (D-05, Pitfall 5)
+      # .trivyignore at repo root is automatically read by trivy-action
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:scan-gate
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      # Pass 2: multi-arch push with SBOM + provenance attestations (CI-02, CI-03, D-07)
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+        id: build-push
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
+
+      # Upload Trivy SARIF to Security tab (if: always() so it uploads even on scan failure)
+      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      # Install cosign for keyless signing (D-08, CI-05)
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      # Sign published image by digest with keyless OIDC (Pitfall 3: --yes required in CI)
+      - name: Sign image by digest
+        env:
+          DIGEST: ${{ steps.build-push.outputs.digest }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
