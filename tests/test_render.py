@@ -75,7 +75,6 @@ async def test_unknown_kind_raises() -> None:
 async def test_generator_is_pure() -> None:
     """Generator function completes via threadpool without I/O (GEN-04)."""
     from matchup_thumbs.generators.thumb import generate_thumb_style0
-
     from tests.conftest import fixture_decoded_assets
 
     # Pure function: call directly (no async, no I/O expected)
@@ -365,7 +364,6 @@ async def test_singleflight_degrade() -> None:
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_PLAN02
 async def test_asset_loader_fallback() -> None:
     """Asset loader returns placeholder when Redis misses and httpx fails (D-16)."""
     from unittest.mock import AsyncMock, MagicMock
@@ -379,6 +377,38 @@ async def test_asset_loader_fallback() -> None:
     http_client = MagicMock()
     http_client.get = AsyncMock(side_effect=Exception("network error"))
 
+    # Use a team with a logo_url so the httpx path is exercised
+    lakers_with_url = {**fixture_lakers(), "logo_url": "https://a.espncdn.com/logo.png"}
+
+    assets = await load_assets(
+        away=lakers_with_url,
+        home=fixture_clippers(),
+        redis=redis,
+        http_client=http_client,
+        league="nba",
+    )
+
+    # Both logos should be decoded RGBA images (placeholder fallback)
+    assert isinstance(assets["away_logo"], Image.Image)
+    assert isinstance(assets["home_logo"], Image.Image)
+    assert assets["away_logo"].mode == "RGBA"
+    assert assets["home_logo"].mode == "RGBA"
+
+
+async def test_asset_loader_redis_hit() -> None:
+    """Asset loader decodes RGBA logo from Redis cache; no httpx call made (D-16)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from matchup_thumbs.assets.loader import load_assets
+
+    png_bytes = _make_synthetic_png((64, 64))
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=png_bytes)  # cache hit
+
+    http_client = MagicMock()
+    http_client.get = AsyncMock()  # must NOT be called on hit
+
     assets = await load_assets(
         away=fixture_lakers(),
         home=fixture_clippers(),
@@ -387,7 +417,44 @@ async def test_asset_loader_fallback() -> None:
         league="nba",
     )
 
-    # Both logos should be the placeholder (RGBA decoded)
-    assert isinstance(assets["away_logo"], Image.Image)
-    assert isinstance(assets["home_logo"], Image.Image)
     assert assets["away_logo"].mode == "RGBA"
+    assert assets["home_logo"].mode == "RGBA"
+    # No httpx call on a Redis hit
+    http_client.get.assert_not_called()
+
+
+async def test_asset_loader_refetch_on_miss() -> None:
+    """Loader re-fetches logo on Redis miss and re-caches it (D-16, CACHE-01)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from matchup_thumbs.assets.loader import load_assets
+    from matchup_thumbs.settings import settings
+
+    png_bytes = _make_synthetic_png((64, 64))
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)  # cache miss
+    redis.set = AsyncMock(return_value=None)
+
+    # httpx returns valid PNG bytes
+    mock_response = MagicMock()
+    mock_response.content = png_bytes
+    mock_response.raise_for_status = MagicMock()
+
+    http_client = MagicMock()
+    http_client.get = AsyncMock(return_value=mock_response)
+
+    lakers_with_url = {**fixture_lakers(), "logo_url": "https://a.espncdn.com/logo.png"}
+
+    assets = await load_assets(
+        away=lakers_with_url,
+        home=fixture_clippers(),
+        redis=redis,
+        http_client=http_client,
+        league="nba",
+    )
+
+    assert assets["away_logo"].mode == "RGBA"
+    # Verify re-cache was called with logo_cache_ttl for the away team's key
+    expected_key = f"logo:nba:{lakers_with_url['espn_id']}".encode()
+    redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
