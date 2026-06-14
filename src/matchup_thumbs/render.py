@@ -37,7 +37,7 @@ import asyncio
 import io
 import uuid
 from functools import partial
-from typing import cast
+from typing import NamedTuple, cast
 
 import anyio
 import httpx
@@ -110,6 +110,45 @@ class UnknownGeneratorError(Exception):
         super().__init__(f"No generator registered for kind={kind!r} style={style!r}")
         self.kind = kind
         self.style = style
+
+
+class BadTransformParam(ValueError):
+    """Raised by ``post_cache_transform`` for invalid ``fmt`` or ``requested_w`` (D-08).
+
+    Subclasses ``ValueError`` so existing ``pytest.raises(ValueError)`` callers
+    still catch it.  Phase 4's 04-02 handler reads ``.param`` to build the 400
+    body — avoiding magic-string message parsing (CLAUDE.md no-magic-strings,
+    RESEARCH Pattern 6 alternative).
+
+    Attributes:
+        param: The parameter name that was invalid.  One of ``"fmt"`` or ``"w"``.
+        value: The string representation of the invalid value that was supplied.
+    """
+
+    def __init__(self, param: str, value: str) -> None:
+        super().__init__(f"bad transform param {param}={value!r}")
+        self.param = param
+        self.value = value
+
+
+class RenderResult(NamedTuple):
+    """Return value of ``render_pipeline`` (D-09).
+
+    Carries both the canonical PNG bytes and the cache tier so route handlers
+    can emit per-tier metrics and structured log fields without reading global
+    state.
+
+    Attributes:
+        png:  Canonical PNG bytes from the render cache or local render.
+        tier: Cache tier for this result.  Closed vocabulary:
+              ``"hit"`` (cache read hit),
+              ``"miss"`` (this caller rendered as lock holder),
+              ``"coalesced"`` (waiter received the holder's result),
+              ``"degraded"`` (singleflight timed out; rendered locally).
+    """
+
+    png: bytes
+    tier: str
 
 
 # ---------------------------------------------------------------------------
@@ -210,12 +249,12 @@ async def render_pipeline(
     redis: Redis,
     http_client: httpx.AsyncClient,
     settings: Settings,
-) -> bytes:
-    """Return canonical PNG bytes for the given matchup.
+) -> RenderResult:
+    """Return ``RenderResult(png, tier)`` for the given matchup (D-09).
 
     Cache-read → singleflight → asset load → threadpool render → cache write.
-    Returns raw PNG bytes; ``?w`` and ``?fmt`` transforms are applied by the
-    caller via ``post_cache_transform`` (D-09, OUT-03).
+    Returns a :class:`RenderResult`; ``?w`` and ``?fmt`` transforms are applied
+    by the caller via ``post_cache_transform`` (D-09, OUT-03).
 
     Args:
         league:      League slug (e.g. ``"nba"``).
@@ -258,7 +297,7 @@ async def render_pipeline(
             kind=kind,
             style=style,
         )
-        return cached
+        return RenderResult(png=cached, tier="hit")
 
     # ------------------------------------------------------------------
     # 2. Singleflight — try to acquire the render lock via SET NX (D-13).
@@ -290,7 +329,7 @@ async def render_pipeline(
             # another holder may have acquired the lock — we must NOT delete
             # it.  The lock_id uuid written at SET NX time is the owner token.
             await redis.eval(_RELEASE_LOCK_LUA, 1, lock_key, lock_id)
-        return png
+        return RenderResult(png=png, tier="miss")
 
     # ------------------------------------------------------------------
     # 4. Waiter path: poll the result key until the holder writes it.
@@ -309,7 +348,7 @@ async def render_pipeline(
                 style=style,
                 waited_seconds=waited,
             )
-            return result
+            return RenderResult(png=result, tier="coalesced")
 
     # ------------------------------------------------------------------
     # 5. Degraded fallback (D-14): render locally rather than erroring.
@@ -338,7 +377,7 @@ async def render_pipeline(
             style=style,
             error=str(exc),
         )
-    return png
+    return RenderResult(png=png, tier="degraded")
 
 
 def post_cache_transform(
@@ -367,8 +406,10 @@ def post_cache_transform(
         ``"image/png"`` or ``"image/webp"``.
 
     Raises:
-        ValueError: if ``fmt`` is not in ``{"png", "webp"}`` (WR-03), or if
-            ``requested_w`` is non-positive (WR-04).
+        BadTransformParam: (subclasses ``ValueError``) if ``fmt`` is not in
+            ``{"png", "webp"}`` (WR-03) — ``.param == "fmt"``; or if
+            ``requested_w`` is non-positive (WR-04) — ``.param == "w"``.
+            Phase 4's 04-02 handler reads ``.param`` for the 400 body (D-08).
 
     Note:
         This function is CPU-bound (Pillow resize + encode).  When calling from
@@ -377,13 +418,11 @@ def post_cache_transform(
     """
     # WR-03: reject unsupported formats before any Pillow work.
     if fmt not in _SUPPORTED_FMTS:
-        raise ValueError(
-            f"Unsupported fmt: {fmt!r}; must be one of {sorted(_SUPPORTED_FMTS)}"
-        )
+        raise BadTransformParam(param="fmt", value=fmt)
 
     # WR-04: reject non-positive widths — zero/negative corrupt resize.
     if requested_w is not None and requested_w <= 0:
-        raise ValueError(f"requested_w must be positive, got {requested_w!r}")
+        raise BadTransformParam(param="w", value=str(requested_w))
 
     # CR-02: apply the same decompression-bomb discipline here as in the asset
     # loader (T-03-09).  Although png_bytes normally comes from our own render

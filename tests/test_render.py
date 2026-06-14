@@ -221,8 +221,9 @@ async def test_render_writes_cache() -> None:
         settings=settings,
     )
 
-    assert isinstance(result, bytes)
-    assert len(result) > 0
+    assert isinstance(result.png, bytes)
+    assert len(result.png) > 0
+    assert result.tier == "miss"
 
     # Verify a cache write call with ex=render_cache_ttl occurred (CACHE-01)
     ttl = settings.render_cache_ttl
@@ -300,7 +301,8 @@ async def test_cache_hit_no_rerender() -> None:
         settings=settings,
     )
 
-    assert result == png_bytes
+    assert result.png == png_bytes
+    assert result.tier == "hit"
     redis.set.assert_not_called()  # no write on cache hit
 
 
@@ -348,7 +350,8 @@ async def test_singleflight_waiter() -> None:
         settings=mock_settings,
     )
 
-    assert result == png_bytes
+    assert result.png == png_bytes
+    assert result.tier == "coalesced"
 
 
 # ---------------------------------------------------------------------------
@@ -398,8 +401,9 @@ async def test_singleflight_degrade() -> None:
         settings=mock_settings,
     )
 
-    assert isinstance(result, bytes)
-    assert len(result) > 0
+    assert isinstance(result.png, bytes)
+    assert len(result.png) > 0
+    assert result.tier == "degraded"
 
 
 # ---------------------------------------------------------------------------
@@ -516,18 +520,21 @@ async def test_asset_loader_refetch_on_miss() -> None:
 
 
 def test_unknown_fmt_raises() -> None:
-    """post_cache_transform raises ValueError for unsupported fmt (WR-03)."""
-    from matchup_thumbs.render import post_cache_transform
+    """post_cache_transform raises BadTransformParam for unsupported fmt (WR-03)."""
+    from matchup_thumbs.render import BadTransformParam, post_cache_transform
 
     png = _make_synthetic_png((100, 100))
-    with pytest.raises(ValueError, match="Unsupported fmt"):
+    with pytest.raises(BadTransformParam) as exc_info:
         post_cache_transform(png, kind="thumb", fmt="jpeg", requested_w=None)
+    assert exc_info.value.param == "fmt"
 
-    with pytest.raises(ValueError, match="Unsupported fmt"):
+    with pytest.raises(BadTransformParam) as exc_info2:
         post_cache_transform(png, kind="thumb", fmt="", requested_w=None)
+    assert exc_info2.value.param == "fmt"
 
-    with pytest.raises(ValueError, match="Unsupported fmt"):
+    with pytest.raises(BadTransformParam) as exc_info3:
         post_cache_transform(png, kind="thumb", fmt="wepb", requested_w=None)
+    assert exc_info3.value.param == "fmt"
 
 
 # ---------------------------------------------------------------------------
@@ -536,16 +543,18 @@ def test_unknown_fmt_raises() -> None:
 
 
 def test_nonpositive_width_raises() -> None:
-    """post_cache_transform raises ValueError for requested_w <= 0 (WR-04)."""
-    from matchup_thumbs.render import post_cache_transform
+    """post_cache_transform raises BadTransformParam for requested_w <= 0 (WR-04)."""
+    from matchup_thumbs.render import BadTransformParam, post_cache_transform
 
     png = _make_synthetic_png((200, 100))
 
-    with pytest.raises(ValueError, match="requested_w must be positive"):
+    with pytest.raises(BadTransformParam) as exc_info:
         post_cache_transform(png, kind="thumb", fmt="png", requested_w=0)
+    assert exc_info.value.param == "w"
 
-    with pytest.raises(ValueError, match="requested_w must be positive"):
+    with pytest.raises(BadTransformParam) as exc_info2:
         post_cache_transform(png, kind="thumb", fmt="png", requested_w=-50)
+    assert exc_info2.value.param == "w"
 
 
 # ---------------------------------------------------------------------------
@@ -612,8 +621,9 @@ async def test_singleflight_degrade_writes_cache() -> None:
         settings=mock_settings,
     )
 
-    assert isinstance(result, bytes)
-    assert len(result) > 0
+    assert isinstance(result.png, bytes)
+    assert len(result.png) > 0
+    assert result.tier == "degraded"
 
     # WR-01: verify at least one redis.set call used ex=render_cache_ttl
     # (the degraded cache-populate write).
