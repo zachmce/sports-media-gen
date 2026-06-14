@@ -9,9 +9,11 @@ import structlog
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 from psycopg_pool import AsyncConnectionPool
 from redis.asyncio import Redis
 
+from .middleware import RequestLoggingMiddleware
 from .render import BadTransformParam, UnknownGeneratorError
 from .routes import health, images, leagues
 from .settings import settings
@@ -79,6 +81,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="matchup-thumbs", lifespan=lifespan)
+
+# ---------------------------------------------------------------------------
+# Prometheus instrumentation (D-10, OBS-01) — before routers (Pitfall 5)
+# ---------------------------------------------------------------------------
+# instrument() adds PrometheusInstrumentatorMiddleware; expose() registers
+# GET /metrics as a standard FastAPI route.  Both must be called before
+# include_router so the route table is complete at first request.
+#
+# Note for Phase 5: /metrics must NOT be rate-limited in the nginx config
+# (proxy_cache zone excludes /metrics alongside /healthz and /readyz).
+instrumentator = Instrumentator(
+    should_group_status_codes=False,       # keep 200/404/400/503 distinct
+    should_ignore_untemplated=True,        # skip metrics for unknown-path 404s
+    excluded_handlers=["/metrics"],        # don't record the scrape endpoint itself
+)
+instrumentator.instrument(app).expose(app, include_in_schema=False)
+
+# RequestLoggingMiddleware added AFTER instrument() so it runs OUTERMOST
+# (Starlette: last add_middleware = outermost in execution order).
+# Outer → RequestLogging → Prometheus → route handler → Prometheus → RequestLogging
+app.add_middleware(RequestLoggingMiddleware)
 
 
 # ---------------------------------------------------------------------------
