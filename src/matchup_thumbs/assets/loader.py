@@ -28,6 +28,7 @@ from PIL import Image
 from redis.asyncio import Redis
 
 from ..generators.types import DecodedAssets, TeamDict
+from ..metrics import espn_fetch_failures_total
 from ..settings import Settings
 from . import get_placeholder_logo
 
@@ -82,6 +83,7 @@ async def _load_one_logo(
                 league=league,
                 error=str(exc),
             )
+            espn_fetch_failures_total.inc()
             raw = None
 
     if raw is None:

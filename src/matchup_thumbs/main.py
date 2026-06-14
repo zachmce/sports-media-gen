@@ -7,11 +7,13 @@ from contextlib import AsyncExitStack, asynccontextmanager
 import httpx
 import structlog
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from psycopg_pool import AsyncConnectionPool
 from redis.asyncio import Redis
 
-from .routes import health, leagues
+from .render import BadTransformParam, UnknownGeneratorError
+from .routes import health, images, leagues
 from .settings import settings
 
 structlog.configure(
@@ -77,8 +79,58 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="matchup-thumbs", lifespan=lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Exception handlers (D-07/D-08) — registered before routers
+# ---------------------------------------------------------------------------
+
+
+@app.exception_handler(UnknownGeneratorError)
+async def unknown_generator_handler(
+    request: Request, exc: UnknownGeneratorError
+) -> JSONResponse:
+    """Map UnknownGeneratorError → HTTP 400 with D-07 body (D-08)."""
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": {
+                "error": "unknown_generator",
+                "kind": exc.kind,
+                "style": exc.style,
+            }
+        },
+    )
+
+
+@app.exception_handler(BadTransformParam)
+async def bad_transform_param_handler(
+    request: Request, exc: BadTransformParam
+) -> JSONResponse:
+    """Map BadTransformParam → HTTP 400 with D-07 body (D-08).
+
+    Reads exc.param and exc.value directly — no message-string parsing
+    (CLAUDE.md no-magic-strings-in-logic, RESEARCH Pattern 6 alternative).
+    """
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": {
+                "error": "bad_request",
+                "param": exc.param,
+                "value": exc.value,
+            }
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Router registration — image routes LAST (D-01)
+# ---------------------------------------------------------------------------
+
 app.include_router(health.router)
 app.include_router(leagues.router)
+app.include_router(images.router)  # LAST — 4-seg and 5-seg image routes (D-01)
 
 
 def main() -> None:
