@@ -193,6 +193,8 @@ async def test_render_writes_cache() -> None:
     redis.get = AsyncMock(return_value=None)  # always cache miss
     redis.set = AsyncMock(side_effect=[True, None])  # lock acquired, then cache write
     redis.delete = AsyncMock()
+    # CR-01: lock release now uses compare-and-delete via Lua EVAL, not delete()
+    redis.eval = AsyncMock(return_value=1)
 
     http_client = MagicMock()
 
@@ -217,8 +219,13 @@ async def test_render_writes_cache() -> None:
     ]
     assert len(render_write_calls) >= 1
 
-    # Verify lock was deleted after render
-    redis.delete.assert_called_once()
+    # CR-01 / IN-05: lock release uses compare-and-delete (Lua EVAL), not
+    # unconditional delete().  Verify eval was called and delete was NOT called.
+    redis.eval.assert_called_once()
+    eval_call = redis.eval.call_args
+    # EVAL args: (script, num_keys, lock_key, lock_id) — 4 positional args
+    assert eval_call.args[1] == 1, "numkeys must be 1"
+    redis.delete.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

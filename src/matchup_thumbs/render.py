@@ -53,6 +53,21 @@ from .settings import Settings
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
+# Singleflight: compare-and-delete Lua script (CR-01, T-03-03)
+#
+# Only deletes the lock if the stored value matches the caller's lock_id.
+# Without this guard, a slow holder whose TTL expired would delete a different
+# holder's freshly-acquired lock — defeating singleflight under contention.
+# ---------------------------------------------------------------------------
+
+_RELEASE_LOCK_LUA: str = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+# ---------------------------------------------------------------------------
 # Public constants
 # ---------------------------------------------------------------------------
 
@@ -261,8 +276,12 @@ async def render_pipeline(
             # CACHE-01: store canonical PNG with long TTL (D-12).
             await redis.set(render_key, png, ex=settings.render_cache_ttl)
         finally:
-            # Release the lock regardless of render success/failure.
-            await redis.delete(lock_key)
+            # Compare-and-delete: only release the lock if we still own it
+            # (CR-01, T-03-03).  Uses a Lua EVAL so the GET + conditional DEL
+            # is atomic.  If the lock_ttl expired while we were rendering,
+            # another holder may have acquired the lock — we must NOT delete
+            # it.  The lock_id uuid written at SET NX time is the owner token.
+            await redis.eval(_RELEASE_LOCK_LUA, 1, lock_key, lock_id)
         return png
 
     # ------------------------------------------------------------------
