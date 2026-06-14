@@ -1,0 +1,19 @@
+# .trivyignore
+#
+# CVE allowlist for the matchup-thumbs image.
+#
+# Policy (D-05): Only fixable HIGH/CRITICAL CVEs may be added here,
+# and only when a remediation path is not yet available. Unfixable/
+# will_not_fix findings are automatically suppressed by the Trivy
+# workflow step via `ignore-unfixed: true` and do not need to be
+# listed here.
+#
+# A CVE listed here is accepted-but-not-blocking; document the reason
+# inline. Remove entries once an upstream fix is available.
+#
+# Local scan performed: 2026-06-14
+# Command: trivy image --severity HIGH,CRITICAL --ignore-unfixed sports-media-gen-api:latest
+# Result: CLEAN — zero fixable HIGH/CRITICAL CVEs found in debian:12.14 base
+# or any Python package in the venv. No CVE lines needed at this time.
+#
+# Rebuild and rescan periodically (every 30 days or before each release).
