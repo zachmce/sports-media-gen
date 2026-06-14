@@ -411,12 +411,15 @@ async def test_asset_loader_fallback() -> None:
     # Use a team with a logo_url so the httpx path is exercised
     lakers_with_url = {**fixture_lakers(), "logo_url": "https://a.espncdn.com/logo.png"}
 
+    from matchup_thumbs.settings import settings
+
     assets = await load_assets(
         away=lakers_with_url,
         home=fixture_clippers(),
         redis=redis,
         http_client=http_client,
         league="nba",
+        settings=settings,
     )
 
     # Both logos should be decoded RGBA images (placeholder fallback)
@@ -440,12 +443,15 @@ async def test_asset_loader_redis_hit() -> None:
     http_client = MagicMock()
     http_client.get = AsyncMock()  # must NOT be called on hit
 
+    from matchup_thumbs.settings import settings
+
     assets = await load_assets(
         away=fixture_lakers(),
         home=fixture_clippers(),
         redis=redis,
         http_client=http_client,
         league="nba",
+        settings=settings,
     )
 
     assert assets["away_logo"].mode == "RGBA"
@@ -483,6 +489,7 @@ async def test_asset_loader_refetch_on_miss() -> None:
         redis=redis,
         http_client=http_client,
         league="nba",
+        settings=settings,
     )
 
     assert assets["away_logo"].mode == "RGBA"

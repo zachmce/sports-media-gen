@@ -181,7 +181,7 @@ async def _render_and_encode(
         UnknownGeneratorError: if (kind, style) is not registered.  Callers
             should validate before calling — this is a defence in depth guard.
     """
-    assets = await load_assets(away, home, redis, http_client, league)
+    assets = await load_assets(away, home, redis, http_client, league, settings)
     gen_fn = get_generator(kind, style)
     # Guard — callers validate before reaching here; this assertion surfaces
     # any coding error (e.g. degraded path calling with an unknown kind).

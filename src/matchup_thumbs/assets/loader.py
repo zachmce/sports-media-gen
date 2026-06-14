@@ -28,7 +28,7 @@ from PIL import Image
 from redis.asyncio import Redis
 
 from ..generators.types import DecodedAssets, TeamDict
-from ..settings import settings
+from ..settings import Settings
 from . import get_placeholder_logo
 
 logger = structlog.get_logger()
@@ -44,6 +44,7 @@ async def _load_one_logo(
     redis: Redis,  # bare Redis (redis-py 8.0 is not a generic class at runtime)
     http_client: httpx.AsyncClient,
     league: str,
+    settings: Settings,
 ) -> Image.Image:
     """Fetch a single team logo as an RGBA PIL.Image.
 
@@ -115,6 +116,7 @@ async def load_assets(
     redis: Redis,  # bare Redis (redis-py 8.0 is not a generic class at runtime)
     http_client: httpx.AsyncClient,
     league: str,
+    settings: Settings,
 ) -> DecodedAssets:
     """Load and decode logos for both matchup teams.
 
@@ -128,11 +130,12 @@ async def load_assets(
         redis: Async Redis client (``decode_responses=False``).
         http_client: Shared async HTTP client (from ``app.state.http_client``).
         league: League slug used in the Redis key and error logs.
+        settings: Application settings (WR-06: passed explicitly for testability).
 
     Returns:
         A ``DecodedAssets`` dict with ``away_logo`` and ``home_logo`` as RGBA
         ``PIL.Image`` instances.  Never returns ``None`` for either field.
     """
-    away_logo = await _load_one_logo(away, redis, http_client, league)
-    home_logo = await _load_one_logo(home, redis, http_client, league)
+    away_logo = await _load_one_logo(away, redis, http_client, league, settings)
+    home_logo = await _load_one_logo(home, redis, http_client, league, settings)
     return DecodedAssets(away_logo=away_logo, home_logo=home_logo)

@@ -152,6 +152,56 @@ def test_null_color_fallback() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CR-03: Malformed hex color strings fall back to grey (not ValueError)
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_hex_color_fallback() -> None:
+    """Generators must not raise when primary_color is a malformed hex string (CR-03).
+
+    hex_to_rgb() in _color.py must return the D-15 grey fallback for any
+    malformed or short hex string instead of propagating ValueError into the
+    render threadpool.
+    """
+    from matchup_thumbs.generators._color import NULL_PRIMARY, hex_to_rgb
+
+    fb = NULL_PRIMARY
+
+    # None → fallback (pre-existing behaviour)
+    assert hex_to_rgb(None, fb) == fb
+    # Empty string → fallback
+    assert hex_to_rgb("", fb) == fb
+    # CSS 3-digit shorthand (#abc) → fallback (cannot expand to 6 digits safely)
+    assert hex_to_rgb("#abc", fb) == fb
+    # Bare hash → fallback
+    assert hex_to_rgb("#", fb) == fb
+    # Non-hex characters → fallback
+    assert hex_to_rgb("#xyzxyz", fb) == fb
+    # Valid 6-digit hex → parsed correctly
+    assert hex_to_rgb("#552583", fb) == (85, 37, 131)
+    assert hex_to_rgb("#3A3A3A", fb) == (58, 58, 58)
+
+
+def test_malformed_hex_generators_do_not_raise() -> None:
+    """Generators complete without raising for malformed primary_color (CR-03).
+
+    Covers both thumb and poster generators since both use hex_to_rgb.
+    """
+    from matchup_thumbs.generators.poster import generate_poster_style0
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+
+    malformed_away: dict[str, Any] = {**fixture_lakers(), "primary_color": "#abc"}
+    malformed_home: dict[str, Any] = {**fixture_clippers(), "primary_color": ""}
+
+    # Must not raise; result must be the correct canvas size
+    thumb_img = generate_thumb_style0(malformed_away, malformed_home, fixture_decoded_assets())
+    assert thumb_img.size == (1280, 720)
+
+    poster_img = generate_poster_style0(malformed_away, malformed_home, fixture_decoded_assets())
+    assert poster_img.size == (800, 1200)
+
+
+# ---------------------------------------------------------------------------
 # GEN-06: Golden-image regression (must run inside Docker image per GEN-06)
 # ---------------------------------------------------------------------------
 
