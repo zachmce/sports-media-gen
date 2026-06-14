@@ -72,6 +72,18 @@ async def test_unknown_kind_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CACHE-05: Cache-Control constant has the required immutable directive
+# ---------------------------------------------------------------------------
+
+
+def test_cache_control_constant() -> None:
+    """CACHE_CONTROL_IMMUTABLE equals the required header value (CACHE-05)."""
+    from matchup_thumbs.render import CACHE_CONTROL_IMMUTABLE
+
+    assert CACHE_CONTROL_IMMUTABLE == "public, max-age=2592000, immutable"
+
+
+# ---------------------------------------------------------------------------
 # GEN-04: Generator has no I/O; runs in threadpool
 # ---------------------------------------------------------------------------
 
