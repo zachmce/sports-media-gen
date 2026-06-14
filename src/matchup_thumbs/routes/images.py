@@ -63,6 +63,11 @@ NCAA_SPORT_SLUGS: dict[str, str] = {
     "basketball": "ncaab",
 }
 
+# Upper bound for the ?fmt query value — the longest supported format ("webp")
+# is 4 chars; reject oversized input at the FastAPI validation layer (422)
+# before it reaches post_cache_transform (review WR-03).
+_FMT_MAX_LEN = 8
+
 router = APIRouter()
 
 
@@ -79,7 +84,7 @@ async def ncaa_image(
     kind: str,
     request: Request,
     style: Annotated[int, Query()] = 0,
-    fmt: Annotated[str, Query()] = "png",
+    fmt: Annotated[str, Query(max_length=_FMT_MAX_LEN)] = "png",
     w: Annotated[int | None, Query(gt=0)] = None,
 ) -> Response:
     """NCAA multi-sport image route; maps sport to canonical league slug (API-02)."""
@@ -105,7 +110,7 @@ async def general_image(
     kind: str,
     request: Request,
     style: Annotated[int, Query()] = 0,
-    fmt: Annotated[str, Query()] = "png",
+    fmt: Annotated[str, Query(max_length=_FMT_MAX_LEN)] = "png",
     w: Annotated[int | None, Query(gt=0)] = None,
 ) -> Response:
     """General 4-segment image route for single-sport leagues (API-01)."""

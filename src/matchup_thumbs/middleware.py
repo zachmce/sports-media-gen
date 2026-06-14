@@ -23,6 +23,7 @@ are automatically merged into the final ``request_completed`` line via
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from collections.abc import MutableMapping
@@ -34,6 +35,25 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = structlog.get_logger()
+
+# Inbound X-Request-ID is untrusted. Opaque correlation IDs (uuid hex, uuids
+# with dashes, W3C trace IDs) use only [A-Za-z0-9._-]; strip everything else —
+# CR/LF, spaces, and other control characters — so a forged header cannot break
+# or spoof a structured log line, and bound the length (T-04-10 / review WR-02).
+_REQUEST_ID_MAX_LEN = 128
+_REQUEST_ID_DISALLOWED = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_request_id(raw: str | None) -> str:
+    """Return a safe correlation ID from an inbound header value.
+
+    Strips disallowed characters and bounds length; falls back to a fresh
+    ``uuid4().hex`` when the header is absent or sanitizes to empty.
+    """
+    if raw is None:
+        return uuid.uuid4().hex
+    cleaned = _REQUEST_ID_DISALLOWED.sub("", raw)[:_REQUEST_ID_MAX_LEN]
+    return cleaned or uuid.uuid4().hex
 
 
 class RequestLoggingMiddleware:
@@ -58,7 +78,7 @@ class RequestLoggingMiddleware:
         structlog.contextvars.clear_contextvars()
 
         request = Request(scope)
-        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        request_id = _sanitize_request_id(request.headers.get("X-Request-ID"))
         structlog.contextvars.bind_contextvars(
             request_id=request_id,
             method=request.method,
@@ -73,9 +93,9 @@ class RequestLoggingMiddleware:
             if message["type"] == "http.response.start":
                 status_code = message["status"]
                 # Echo the request_id back on the response (D-13).
-                # request_id is either uuid4().hex (hex-only) or an inbound
-                # header already split on CRLF by the ASGI server — appending
-                # as a tuple does not enable header injection (T-04-10).
+                # request_id is sanitized to [A-Za-z0-9._-] and length-bounded
+                # by _sanitize_request_id, so this echo cannot carry CR/LF or
+                # other control characters into the response (T-04-10).
                 headers = list(message.get("headers", []))
                 headers.append((b"x-request-id", request_id.encode()))
                 message = {**message, "headers": headers}

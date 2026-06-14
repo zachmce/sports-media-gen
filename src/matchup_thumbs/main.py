@@ -166,7 +166,7 @@ def main() -> None:
     warnings.warn(
         "Running via bare uvicorn. For production, use the Dockerfile CMD "
         "(gunicorn + UvicornWorker).",
-        stacklevel=1,
+        stacklevel=2,
     )
     uvicorn.run(
         "matchup_thumbs.main:app",

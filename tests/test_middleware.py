@@ -15,6 +15,7 @@ import structlog.testing
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from matchup_thumbs.middleware import _REQUEST_ID_MAX_LEN, _sanitize_request_id
 from matchup_thumbs.render import RenderResult
 
 # Shorthand: capture_logs with merge_contextvars so bound context vars are
@@ -95,6 +96,28 @@ def test_x_request_id_honored(client: TestClient) -> None:
     generated = resp2.headers.get("x-request-id")
     assert generated is not None
     assert len(generated) == 32  # uuid4().hex is always 32 hex chars
+
+
+def test_sanitize_request_id_strips_control_chars_and_bounds_length() -> None:
+    """Inbound X-Request-ID is reduced to [A-Za-z0-9._-] and length-bounded (WR-02).
+
+    A forged value carrying CR/LF (log-injection attempt) has the control
+    characters and other disallowed bytes stripped; an over-long value is
+    truncated; a value that sanitizes to empty (or an absent header) falls back
+    to a fresh uuid4().hex.
+    """
+    # CR/LF + '=' + space are all disallowed and removed.
+    cleaned = _sanitize_request_id("real\r\nfake_event=injected value")
+    assert "\r" not in cleaned and "\n" not in cleaned and " " not in cleaned
+    assert cleaned == "realfake_eventinjectedvalue"
+
+    # Over-long value is truncated to the bound.
+    assert len(_sanitize_request_id("a" * 500)) == _REQUEST_ID_MAX_LEN
+
+    # All-disallowed input falls back to a generated 32-char hex id.
+    assert len(_sanitize_request_id("\r\n\t   ")) == 32
+    # Absent header falls back to a generated id too.
+    assert len(_sanitize_request_id(None)) == 32
 
 
 def test_contextvars_no_bleed_after_image_request(client: TestClient) -> None:
