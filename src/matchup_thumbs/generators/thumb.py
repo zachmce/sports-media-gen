@@ -19,6 +19,7 @@ from __future__ import annotations
 from PIL import Image, ImageDraw, ImageFilter
 
 from ..assets import _load_font
+from ._color import NULL_PRIMARY, hex_to_rgb
 from .registry import register
 from .types import DecodedAssets, TeamDict
 
@@ -30,13 +31,10 @@ _THUMB_W: int = 1280
 _THUMB_H: int = 720
 
 # ---------------------------------------------------------------------------
-# Colour fallbacks — D-15
-# Primary  #3A3A3A = (58, 58, 58)
-# Secondary #6E6E6E = (110, 110, 110)
+# Colour fallbacks — D-15 (imported from shared _color module)
 # ---------------------------------------------------------------------------
 
-_NULL_PRIMARY: tuple[int, int, int] = (58, 58, 58)
-_NULL_SECONDARY: tuple[int, int, int] = (110, 110, 110)
+_NULL_PRIMARY: tuple[int, int, int] = NULL_PRIMARY
 
 # ---------------------------------------------------------------------------
 # Layout constants (Claude's discretion — see CONTEXT.md "Discretion" note)
@@ -46,25 +44,6 @@ _LOGO_SIZE: int = 280  # each logo resized to this square
 _BLUR_RADIUS: int = 40  # GaussianBlur radius for diagonal seam blend
 _VS_FONT_SIZE: int = 144  # BarlowCondensed-Bold pixel size for "VS"
 _VS_STROKE_WIDTH: int = 5  # black outline around VS wordmark
-
-
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
-
-
-def _hex_to_rgb(
-    hex_color: str | None,
-    fallback: tuple[int, int, int],
-) -> tuple[int, int, int]:
-    """Convert a ``#RRGGBB`` string to an RGB 3-tuple.
-
-    Returns *fallback* when *hex_color* is ``None`` (D-15 grey fallback).
-    """
-    if hex_color is None:
-        return fallback
-    h = hex_color.lstrip("#")
-    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
 # ---------------------------------------------------------------------------
@@ -83,8 +62,8 @@ def generate_thumb_style0(
     Pure — no I/O (GEN-04).  Runs in a threadpool via anyio.to_thread.run_sync
     so it never blocks the async event loop.
     """
-    away_rgb = _hex_to_rgb(away["primary_color"], _NULL_PRIMARY)
-    home_rgb = _hex_to_rgb(home["primary_color"], _NULL_PRIMARY)
+    away_rgb = hex_to_rgb(away["primary_color"], _NULL_PRIMARY)
+    home_rgb = hex_to_rgb(home["primary_color"], _NULL_PRIMARY)
 
     # --- Diagonal split background via GaussianBlur mask (T-03-06 mitigation) ---
     # Image.composite(overlay, base, mask) blends home colour over away colour
