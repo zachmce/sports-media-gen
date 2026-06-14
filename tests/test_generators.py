@@ -2,19 +2,18 @@
 
 Covers:
 - Dimension assertions for all three image kinds (thumb 1280×720, logo 800×800,
-  poster 800×1200) — implemented in Plan 02.
-- Registry lookup by (kind, style) and unknown-kind/style path — Plan 02.
-- NULL color fallback to grey constants (D-15) — Plan 02.
+  poster 800×1200) — GEN-01/GEN-02/GEN-03
+- Registry lookup by (kind, style) and unknown-kind/style path — GEN-05/GEN-07
+- NULL color fallback to grey constants (D-15)
 - Golden-image regression tests — must run inside the production Docker image
   per GEN-06 (font anti-aliasing is architecture-specific).
-
-Tests that target symbols implemented in Plan 02 are marked with
-``pytest.mark.skip`` so this file collects without errors during Wave 0.
-Plan 02 removes the skips as it implements each symbol.
 
 Run inside Docker for golden tests:
     docker compose run --rm api pytest tests/test_generators.py \\
         --image-snapshot-update -q
+Verify committed baselines:
+    docker compose run --rm api pytest tests/test_generators.py \\
+        --image-snapshot-fail-if-missing -q
 """
 
 from __future__ import annotations
@@ -23,20 +22,34 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from PIL import Image
+from PIL import Image, features
 
 from tests.conftest import fixture_clippers, fixture_decoded_assets, fixture_lakers
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 
+# Golden tests require the same FreeType text-rendering environment as the
+# production Docker image (python:3.14-slim-bookworm without raqm/harfbuzz).
+# Hosts with raqm installed produce different anti-aliasing for the "VS"
+# wordmark.  Skip the golden tests on such hosts; they are always gated via
+# the Docker run in CI (GEN-06, RESEARCH.md Pitfall 1).
+_RAQM_AVAILABLE = features.check_feature("raqm")
+_SKIP_GOLDEN = pytest.mark.skipif(
+    _RAQM_AVAILABLE,
+    reason=(
+        "Host has raqm/harfbuzz which alters FreeType text anti-aliasing "
+        "vs the production Docker image.  Run golden tests inside Docker: "
+        "docker compose run --rm api pytest tests/test_generators.py "
+        "--image-snapshot-fail-if-missing -q"
+    ),
+)
+
+
 # ---------------------------------------------------------------------------
 # GEN-01: thumb generates 1280×720 PIL.Image
 # ---------------------------------------------------------------------------
 
-_SKIP_PLAN02 = pytest.mark.skip(reason="Implemented in Plan 02")
 
-
-@_SKIP_PLAN02
 def test_thumb_style0_dimensions() -> None:
     """Thumb canvas is exactly 1280×720 (D-01, GEN-01)."""
     from matchup_thumbs.generators.thumb import generate_thumb_style0
@@ -52,7 +65,6 @@ def test_thumb_style0_dimensions() -> None:
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_PLAN02
 def test_logo_style0_dimensions() -> None:
     """Logo canvas is exactly 800×800 (D-01, GEN-02)."""
     from matchup_thumbs.generators.logo import generate_logo_style0
@@ -68,7 +80,6 @@ def test_logo_style0_dimensions() -> None:
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_PLAN02
 def test_poster_style0_dimensions() -> None:
     """Poster canvas is exactly 800×1200 (D-01, GEN-03)."""
     from matchup_thumbs.generators.poster import generate_poster_style0
@@ -80,20 +91,31 @@ def test_poster_style0_dimensions() -> None:
 
 
 # ---------------------------------------------------------------------------
-# GEN-05: Registry lookup by (kind, style)
+# GEN-05 / GEN-07: Registry lookup by (kind, style)
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_PLAN02
 def test_registry_lookup() -> None:
-    """get_generator returns a callable for each registered (kind, style) (GEN-05)."""
-    from matchup_thumbs.generators import get_generator
+    """get_generator returns a callable for each registered (kind, style) (GEN-05).
 
-    # All style=0 generators must be registered
-    for kind in ("thumb", "logo", "poster"):
-        gen_fn = get_generator(kind, 0)
-        assert gen_fn is not None, f"Expected generator for ({kind!r}, 0)"
-        assert callable(gen_fn)
+    Also verifies that unknown kind and unknown style both return None,
+    enabling the 400 path in the render pipeline (GEN-07).
+    """
+    from matchup_thumbs.generators import get_generator
+    from matchup_thumbs.generators.logo import generate_logo_style0
+    from matchup_thumbs.generators.poster import generate_poster_style0
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+
+    # All style=0 generators must be registered and return the correct function
+    assert get_generator("thumb", 0) is generate_thumb_style0
+    assert get_generator("logo", 0) is generate_logo_style0
+    assert get_generator("poster", 0) is generate_poster_style0
+
+    # Unknown kind → None (GEN-07: 400 path)
+    assert get_generator("bogus", 0) is None
+
+    # Unknown style → None (GEN-07: 400 path)
+    assert get_generator("thumb", 9) is None
 
 
 # ---------------------------------------------------------------------------
@@ -101,10 +123,14 @@ def test_registry_lookup() -> None:
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_PLAN02
 def test_null_color_fallback() -> None:
-    """Generators render without error when team primary_color is None (D-15)."""
-    from matchup_thumbs.generators.thumb import generate_thumb_style0
+    """Generators render without error when team primary_color is None (D-15).
+
+    When primary_color is None the generator must use the named grey fallback
+    constants (_NULL_PRIMARY = #3A3A3A = (58, 58, 58)) rather than raise.
+    The away-team region (upper-left before the diagonal seam) should be grey.
+    """
+    from matchup_thumbs.generators.thumb import _NULL_PRIMARY, generate_thumb_style0
 
     no_color_lakers: dict[str, Any] = {**fixture_lakers(), "primary_color": None}
     no_color_clippers: dict[str, Any] = {**fixture_clippers(), "primary_color": None}
@@ -115,13 +141,22 @@ def test_null_color_fallback() -> None:
     )
     assert img.size == (1280, 720)
 
+    # The top-left corner (away region, solidly in the away colour triangle
+    # and far from the diagonal seam or logo) should be the grey fallback.
+    # We sample the very first pixel which is always in the away colour band.
+    top_left_pixel = img.getpixel((0, 0))
+    assert top_left_pixel[:3] == _NULL_PRIMARY, (
+        f"Expected grey fallback {_NULL_PRIMARY!r} at (0,0), "
+        f"got {top_left_pixel!r}"
+    )
+
 
 # ---------------------------------------------------------------------------
 # GEN-06: Golden-image regression (must run inside Docker image per GEN-06)
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_PLAN02
+@_SKIP_GOLDEN
 def test_thumb_style0_golden(image_snapshot: Any) -> None:  # type: ignore[misc]
     """Visual regression for thumb style=0 Lakers vs Clippers.
 
@@ -137,7 +172,7 @@ def test_thumb_style0_golden(image_snapshot: Any) -> None:  # type: ignore[misc]
     image_snapshot(img, SNAPSHOT_DIR / "thumb_style0_lakers_clippers.png")
 
 
-@_SKIP_PLAN02
+@_SKIP_GOLDEN
 def test_logo_style0_golden(image_snapshot: Any) -> None:  # type: ignore[misc]
     """Visual regression for logo style=0 Lakers vs Clippers (GEN-06)."""
     from matchup_thumbs.generators.logo import generate_logo_style0
@@ -149,7 +184,7 @@ def test_logo_style0_golden(image_snapshot: Any) -> None:  # type: ignore[misc]
     image_snapshot(img, SNAPSHOT_DIR / "logo_style0_lakers_clippers.png")
 
 
-@_SKIP_PLAN02
+@_SKIP_GOLDEN
 def test_poster_style0_golden(image_snapshot: Any) -> None:  # type: ignore[misc]
     """Visual regression for poster style=0 Lakers vs Clippers (GEN-06)."""
     from matchup_thumbs.generators.poster import generate_poster_style0
