@@ -377,7 +377,9 @@ def post_cache_transform(
     """
     # WR-03: reject unsupported formats before any Pillow work.
     if fmt not in _SUPPORTED_FMTS:
-        raise ValueError(f"Unsupported fmt: {fmt!r}; must be one of {sorted(_SUPPORTED_FMTS)}")
+        raise ValueError(
+            f"Unsupported fmt: {fmt!r}; must be one of {sorted(_SUPPORTED_FMTS)}"
+        )
 
     # WR-04: reject non-positive widths — zero/negative corrupt resize.
     if requested_w is not None and requested_w <= 0:

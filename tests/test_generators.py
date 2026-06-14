@@ -194,10 +194,11 @@ def test_malformed_hex_generators_do_not_raise() -> None:
     malformed_home: dict[str, Any] = {**fixture_clippers(), "primary_color": ""}
 
     # Must not raise; result must be the correct canvas size
-    thumb_img = generate_thumb_style0(malformed_away, malformed_home, fixture_decoded_assets())
+    assets = fixture_decoded_assets()
+    thumb_img = generate_thumb_style0(malformed_away, malformed_home, assets)
     assert thumb_img.size == (1280, 720)
 
-    poster_img = generate_poster_style0(malformed_away, malformed_home, fixture_decoded_assets())
+    poster_img = generate_poster_style0(malformed_away, malformed_home, assets)
     assert poster_img.size == (800, 1200)
 
 

@@ -545,12 +545,15 @@ def test_post_cache_transform_rejects_malformed_bytes() -> None:
     """post_cache_transform raises on malformed PNG bytes (CR-02, T-03-09)."""
     from matchup_thumbs.render import post_cache_transform
 
-    with pytest.raises(Exception):  # UnidentifiedImageError or OSError
-        post_cache_transform(b"not a png at all", kind="thumb", fmt="png", requested_w=None)
+    # PIL raises OSError (or its subclass UnidentifiedImageError) on bad input
+    with pytest.raises(OSError):
+        post_cache_transform(
+            b"not a png at all", kind="thumb", fmt="png", requested_w=None
+        )
 
     # Truncated PNG header — valid magic but corrupted body
     valid_magic = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
-    with pytest.raises(Exception):
+    with pytest.raises(OSError):
         post_cache_transform(valid_magic, kind="thumb", fmt="png", requested_w=None)
 
 
@@ -564,7 +567,7 @@ async def test_singleflight_degrade_writes_cache() -> None:
 
     Subsequent requests should get a cache hit rather than degrading again.
     """
-    from unittest.mock import AsyncMock, MagicMock, call
+    from unittest.mock import AsyncMock, MagicMock
 
     from matchup_thumbs.render import render_pipeline
     from matchup_thumbs.settings import Settings
