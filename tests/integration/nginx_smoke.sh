@@ -37,8 +37,8 @@ SC3_ROUTE="/nba/zzz_team_not_real/celtics/thumb"
 PASS=0
 FAIL=0
 
-_pass() { echo "PASS: $1"; ((PASS++)); }
-_fail() { echo "FAIL: $1"; ((FAIL++)); }
+_pass() { echo "PASS: $1"; PASS=$((PASS + 1)); }
+_fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 # ── Reachability pre-check ────────────────────────────────────────────────────
 # If the nginx front door is not up yet (Wave 0: no nginx service in compose),
