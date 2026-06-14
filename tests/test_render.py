@@ -489,3 +489,115 @@ async def test_asset_loader_refetch_on_miss() -> None:
     # Verify re-cache was called with logo_cache_ttl for the away team's key
     expected_key = f"logo:nba:{lakers_with_url['espn_id']}".encode()
     redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
+
+
+# ---------------------------------------------------------------------------
+# WR-03: Unknown fmt raises ValueError (not silently falls through to PNG)
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_fmt_raises() -> None:
+    """post_cache_transform raises ValueError for unsupported fmt (WR-03)."""
+    from matchup_thumbs.render import post_cache_transform
+
+    png = _make_synthetic_png((100, 100))
+    with pytest.raises(ValueError, match="Unsupported fmt"):
+        post_cache_transform(png, kind="thumb", fmt="jpeg", requested_w=None)
+
+    with pytest.raises(ValueError, match="Unsupported fmt"):
+        post_cache_transform(png, kind="thumb", fmt="", requested_w=None)
+
+    with pytest.raises(ValueError, match="Unsupported fmt"):
+        post_cache_transform(png, kind="thumb", fmt="wepb", requested_w=None)
+
+
+# ---------------------------------------------------------------------------
+# WR-04: Non-positive requested_w raises ValueError
+# ---------------------------------------------------------------------------
+
+
+def test_nonpositive_width_raises() -> None:
+    """post_cache_transform raises ValueError for requested_w <= 0 (WR-04)."""
+    from matchup_thumbs.render import post_cache_transform
+
+    png = _make_synthetic_png((200, 100))
+
+    with pytest.raises(ValueError, match="requested_w must be positive"):
+        post_cache_transform(png, kind="thumb", fmt="png", requested_w=0)
+
+    with pytest.raises(ValueError, match="requested_w must be positive"):
+        post_cache_transform(png, kind="thumb", fmt="png", requested_w=-50)
+
+
+# ---------------------------------------------------------------------------
+# CR-02: post_cache_transform rejects malformed/truncated PNG bytes
+# ---------------------------------------------------------------------------
+
+
+def test_post_cache_transform_rejects_malformed_bytes() -> None:
+    """post_cache_transform raises on malformed PNG bytes (CR-02, T-03-09)."""
+    from matchup_thumbs.render import post_cache_transform
+
+    with pytest.raises(Exception):  # UnidentifiedImageError or OSError
+        post_cache_transform(b"not a png at all", kind="thumb", fmt="png", requested_w=None)
+
+    # Truncated PNG header — valid magic but corrupted body
+    valid_magic = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+    with pytest.raises(Exception):
+        post_cache_transform(valid_magic, kind="thumb", fmt="png", requested_w=None)
+
+
+# ---------------------------------------------------------------------------
+# WR-01: Degraded fallback writes result to render cache
+# ---------------------------------------------------------------------------
+
+
+async def test_singleflight_degrade_writes_cache() -> None:
+    """Degraded path writes rendered bytes to the render cache (WR-01).
+
+    Subsequent requests should get a cache hit rather than degrading again.
+    """
+    from unittest.mock import AsyncMock, MagicMock, call
+
+    from matchup_thumbs.render import render_pipeline
+    from matchup_thumbs.settings import Settings
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)  # always miss
+    # set() returns None → lock NOT acquired; waiter path
+    redis.set = AsyncMock(return_value=None)
+    redis.delete = AsyncMock()
+
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.render_version = 1
+    mock_settings.sf_lock_ttl = 10
+    mock_settings.sf_poll_interval = 0.001
+    mock_settings.sf_max_wait = 0.005  # very short → degrade immediately
+    mock_settings.render_cache_ttl = 60
+    mock_settings.logo_cache_ttl = 60
+
+    http_client = MagicMock()
+    http_client.get = AsyncMock(side_effect=Exception("network unreachable"))
+
+    result = await render_pipeline(
+        league="nba",
+        away=fixture_lakers(),
+        home=fixture_clippers(),
+        kind="thumb",
+        style=0,
+        redis=redis,
+        http_client=http_client,
+        settings=mock_settings,
+    )
+
+    assert isinstance(result, bytes)
+    assert len(result) > 0
+
+    # WR-01: verify at least one redis.set call used ex=render_cache_ttl
+    # (the degraded cache-populate write).
+    cache_writes = [
+        c for c in redis.set.call_args_list if c.kwargs.get("ex") == 60
+    ]
+    assert len(cache_writes) >= 1, (
+        "Degraded path must write rendered bytes to the render cache (WR-01)"
+    )

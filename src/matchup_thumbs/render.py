@@ -82,6 +82,14 @@ CONTENT_TYPE_WEBP: str = "image/webp"
 _WEBP_QUALITY: int = 85
 _WEBP_METHOD: int = 6
 
+#: Decompression-bomb pixel cap for post_cache_transform (CR-02, T-03-09).
+#: The largest native canvas is 1280×720 = 921 600 px; 4096×4096 is a generous
+#: upper bound that rejects genuinely malicious oversized blobs.
+_MAX_RENDER_PIXELS: int = 4096 * 4096
+
+#: Supported output formats (WR-03, OUT-01).
+_SUPPORTED_FMTS: frozenset[str] = frozenset({"png", "webp"})
+
 
 # ---------------------------------------------------------------------------
 # Typed error (GEN-07)
@@ -314,9 +322,23 @@ async def render_pipeline(
         style=style,
         sf_max_wait=settings.sf_max_wait,
     )
-    return await _render_and_encode(
+    png = await _render_and_encode(
         league, away, home, kind, style, redis, http_client, settings
     )
+    # WR-01: Best-effort cache populate so subsequent waiters get a cache hit
+    # instead of another degrade.  If the write fails, swallow the error — we
+    # already have the bytes and availability is the priority here.
+    try:
+        await redis.set(render_key, png, ex=settings.render_cache_ttl)
+    except Exception as exc:
+        await logger.awarning(
+            "degraded_cache_write_failed",
+            league=league,
+            kind=kind,
+            style=style,
+            error=str(exc),
+        )
+    return png
 
 
 def post_cache_transform(
@@ -334,20 +356,48 @@ def post_cache_transform(
         png_bytes:   Canonical PNG bytes from the render cache (or render pipeline).
         kind:        Image kind — determines WebP lossless mode for ``"logo"`` (D-10).
         fmt:         Output format: ``"png"`` (default, D-11) or ``"webp"`` (OUT-01).
+                     Any other value raises ``ValueError`` (WR-03).
         requested_w: Desired output width.  ``None`` means no resize.  A value
                      larger than the native width is clamped to native width so
                      the image is never upscaled (D-02, OUT-02, T-03-02).
+                     Non-positive values raise ``ValueError`` (WR-04).
 
     Returns:
         ``(bytes, content_type)`` where ``content_type`` is one of
         ``"image/png"`` or ``"image/webp"``.
+
+    Raises:
+        ValueError: if ``fmt`` is not in ``{"png", "webp"}`` (WR-03), or if
+            ``requested_w`` is non-positive (WR-04).
 
     Note:
         This function is CPU-bound (Pillow resize + encode).  When calling from
         an async FastAPI route handler, use ``anyio.to_thread.run_sync`` to
         avoid blocking the event loop (GEN-04 principle extended to transforms).
     """
-    src: Image.Image = Image.open(io.BytesIO(png_bytes))
+    # WR-03: reject unsupported formats before any Pillow work.
+    if fmt not in _SUPPORTED_FMTS:
+        raise ValueError(f"Unsupported fmt: {fmt!r}; must be one of {sorted(_SUPPORTED_FMTS)}")
+
+    # WR-04: reject non-positive widths — zero/negative corrupt resize.
+    if requested_w is not None and requested_w <= 0:
+        raise ValueError(f"requested_w must be positive, got {requested_w!r}")
+
+    # CR-02: apply the same decompression-bomb discipline here as in the asset
+    # loader (T-03-09).  Although png_bytes normally comes from our own render
+    # cache, the function is a documented public entrypoint and a future caller
+    # or poisoned cache entry could supply adversarial bytes.
+    original_max = Image.MAX_IMAGE_PIXELS
+    Image.MAX_IMAGE_PIXELS = _MAX_RENDER_PIXELS
+    try:
+        src: Image.Image = Image.open(io.BytesIO(png_bytes))
+        src.load()  # force decode so the pixel cap is enforced now
+    except Exception:
+        Image.MAX_IMAGE_PIXELS = original_max
+        raise
+    finally:
+        Image.MAX_IMAGE_PIXELS = original_max
+
     img: Image.Image = src
 
     if requested_w is not None:
