@@ -1,0 +1,15 @@
+{
+  "packages": [
+    {
+      "name": "requests",
+      "version": "2.28.0",
+      "vulns": [
+        {
+          "id": "GHSA-j8r2-6x86-q33q",
+          "fix_versions": ["2.31.0"],
+          "description": "Requests forwards proxy-authorization headers to destination servers."
+        }
+      ]
+    }
+  ]
+}
