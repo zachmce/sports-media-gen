@@ -14,7 +14,9 @@ import psycopg
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from PIL import Image
 
+from matchup_thumbs.generators.types import DecodedAssets
 from matchup_thumbs.main import app
 from matchup_thumbs.settings import Settings
 
@@ -133,13 +135,73 @@ def mock_pool() -> MagicMock:
 def mock_redis() -> MagicMock:
     """Return a MagicMock-backed async Redis client for unit tests.
 
-    Returns None from get() (cache miss) and records set() calls without
-    hitting a real Redis instance.
+    Returns None from get() (cache miss) and records set() / delete() calls
+    without hitting a real Redis instance.
+
+    Phase 3 extensions:
+    - redis.delete = AsyncMock() for singleflight lock release tests.
+    - redis.set returns None by default (lock not acquired in NX tests).
+      Override return_value=True in individual tests to simulate acquisition.
     """
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)
-    redis.set = AsyncMock()
+    redis.set = AsyncMock(return_value=None)
+    redis.delete = AsyncMock()
     return redis
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 fixtures: team dicts and decoded assets for generator / render tests
+# ---------------------------------------------------------------------------
+
+
+def fixture_lakers() -> dict[str, Any]:
+    """Return a TeamDict-compatible dict for the NBA Los Angeles Lakers.
+
+    Values match the seeded_registry fixture (phase 2) so tests that use
+    this helper alongside DB integration tests stay consistent.
+    """
+    return {
+        "id": 1,
+        "league_id": 1,
+        "slug": "los-angeles-lakers",
+        "display_name": "Los Angeles Lakers",
+        "abbreviation": "LAL",
+        "primary_color": "#552583",
+        "secondary_color": "#fdb927",
+        "logo_url": None,
+        "espn_id": "13",
+    }
+
+
+def fixture_clippers() -> dict[str, Any]:
+    """Return a TeamDict-compatible dict for the NBA Los Angeles Clippers.
+
+    Values match the seeded_registry fixture (phase 2) so tests that use
+    this helper alongside DB integration tests stay consistent.
+    """
+    return {
+        "id": 2,
+        "league_id": 1,
+        "slug": "los-angeles-clippers",
+        "display_name": "Los Angeles Clippers",
+        "abbreviation": "LAC",
+        "primary_color": "#c8102e",
+        "secondary_color": "#1d428a",
+        "logo_url": None,
+        "espn_id": "12",
+    }
+
+
+def fixture_decoded_assets() -> DecodedAssets:
+    """Return a DecodedAssets dict with two 200×200 solid-colour RGBA logos.
+
+    Uses Lakers purple and Clippers red so colour-fallback tests can
+    distinguish team regions in the generated image.  No ESPN call needed.
+    """
+    away_logo = Image.new("RGBA", (200, 200), (85, 37, 131, 255))  # Lakers purple
+    home_logo = Image.new("RGBA", (200, 200), (200, 16, 46, 255))  # Clippers red
+    return DecodedAssets(away_logo=away_logo, home_logo=home_logo)
 
 
 @pytest.fixture
