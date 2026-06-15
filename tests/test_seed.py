@@ -19,6 +19,8 @@ from pytest_httpx import HTTPXMock
 from matchup_thumbs.assets import get_placeholder_logo
 from matchup_thumbs.espn.client import (
     LEAGUE_ENDPOINTS,
+    build_logo_variants,
+    derive_variant_key,
     fetch_logo_bytes,
     fetch_teams,
     select_logo_url,
@@ -126,6 +128,84 @@ def test_select_logo_url_scoreboard_not_selected_as_default() -> None:
     # scoreboard is filtered out in step 1; dark is found in step 2
     result = select_logo_url(logos)
     assert result == "https://espn.com/dark.png"
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (08-02): derive_variant_key + build_logo_variants — unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_derive_variant_key() -> None:
+    """derive_variant_key maps ESPN rel lists to canonical keys (LOGO-01 / D-03)."""
+    # Standard variants
+    assert derive_variant_key(["full", "default"]) == "default"
+    assert derive_variant_key(["full", "dark"]) == "dark"
+    assert derive_variant_key(["full", "scoreboard"]) == "scoreboard"
+    # Multi-tag: sorted alphabetically and joined with "_"
+    assert derive_variant_key(["full", "scoreboard", "dark"]) == "dark_scoreboard"
+    # Edge case: only "full" → empty remainder → "default"
+    assert derive_variant_key(["full"]) == "default"
+    # Purpose-built color variant (Phase 10 target)
+    assert (
+        derive_variant_key(["full", "primary_logo_on_primary_color"])
+        == "primary_logo_on_primary_color"
+    )
+
+
+def test_build_logo_variants() -> None:
+    """build_logo_variants returns all expected keys from the extended fixture."""
+    logos = [
+        ESPNLogo(
+            href="https://a.espncdn.com/i/teamlogos/nba/500/lal.png",
+            rel=["full", "default"],
+        ),
+        ESPNLogo(
+            href="https://a.espncdn.com/i/teamlogos/nba/500-dark/lal.png",
+            rel=["full", "dark"],
+        ),
+        ESPNLogo(
+            href="https://a.espncdn.com/i/teamlogos/nba/500/primary_on_primary/lal.png",
+            rel=["full", "primary_logo_on_primary_color"],
+        ),
+    ]
+    variants = build_logo_variants(logos, "los-angeles-lakers", "nba")
+
+    assert variants["default"] == "https://a.espncdn.com/i/teamlogos/nba/500/lal.png"
+    assert (
+        variants["dark"] == "https://a.espncdn.com/i/teamlogos/nba/500-dark/lal.png"
+    )
+    assert variants["primary_logo_on_primary_color"] == (
+        "https://a.espncdn.com/i/teamlogos/nba/500/primary_on_primary/lal.png"
+    )
+    # All three keys are present
+    assert set(variants.keys()) == {"default", "dark", "primary_logo_on_primary_color"}
+
+    # Empty logos array → empty dict
+    assert build_logo_variants([], "los-angeles-lakers", "nba") == {}
+
+
+def test_build_logo_variants_collision() -> None:
+    """Two logos producing the same key → last-write-wins (D-03).
+
+    The final href in the map must be the second logo's href, and no exception
+    should be raised (the collision is logged as a warning, not an error).
+    """
+    first_logo = ESPNLogo(
+        href="https://a.espncdn.com/first.png",
+        rel=["full", "default"],
+    )
+    second_logo = ESPNLogo(
+        href="https://a.espncdn.com/second.png",
+        rel=["full", "default"],
+    )
+    variants = build_logo_variants(
+        [first_logo, second_logo], "test-team", "test-league"
+    )
+
+    # Last-write-wins: second logo's href overwrites first
+    assert variants["default"] == "https://a.espncdn.com/second.png"
+    # Only one key in the map (no duplicate keys)
+    assert list(variants.keys()) == ["default"]
 
 
 # ---------------------------------------------------------------------------

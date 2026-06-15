@@ -26,6 +26,21 @@
                     "href": "https://a.espncdn.com/i/teamlogos/nba/500-dark/lal.png",
                     "rel": ["full", "dark"],
                     "width": 500
+                  },
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/lal.png",
+                    "rel": ["full", "scoreboard"],
+                    "width": 500
+                  },
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/nba/500/primary_on_primary/lal.png",
+                    "rel": ["full", "primary_logo_on_primary_color"],
+                    "width": 500
+                  },
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/nba/500/primary_on_white/lal.png",
+                    "rel": ["full", "primary_logo_on_white_color"],
+                    "width": 500
                   }
                 ]
               }
@@ -46,6 +61,11 @@
                   {
                     "href": "https://a.espncdn.com/i/teamlogos/nba/500/lac.png",
                     "rel": ["full", "default"],
+                    "width": 500
+                  },
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/nba/500/primary_on_primary/lac.png",
+                    "rel": ["full", "primary_logo_on_primary_color"],
                     "width": 500
                   }
                 ]
