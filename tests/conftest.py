@@ -171,6 +171,7 @@ def fixture_lakers() -> dict[str, Any]:
         "secondary_color": "#fdb927",
         "logo_url": None,
         "espn_id": "13",
+        "logo_variants": None,
     }
 
 
@@ -190,6 +191,7 @@ def fixture_clippers() -> dict[str, Any]:
         "secondary_color": "#1d428a",
         "logo_url": None,
         "espn_id": "12",
+        "logo_variants": None,
     }
 
 
