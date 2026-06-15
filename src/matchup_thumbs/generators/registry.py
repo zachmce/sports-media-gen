@@ -62,3 +62,14 @@ def get_generator(kind: str, style: int) -> GeneratorFn | None:
     a ``None`` return into a 400 response (GEN-07).
     """
     return _REGISTRY.get((kind, style))
+
+
+def registered_kinds() -> frozenset[str]:
+    """Return the set of distinct image kinds registered in _REGISTRY.
+
+    Derived from the first element of every (kind, style) key.  A kind
+    is included once regardless of how many styles are registered for it.
+
+    Used by the nginx/registry drift guard (DEBT-01).
+    """
+    return frozenset(kind for (kind, _style) in _REGISTRY)
