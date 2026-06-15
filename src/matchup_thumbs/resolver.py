@@ -1,11 +1,13 @@
-"""2-stage fail-fast, league-scoped team resolver.
+"""3-stage fail-fast, league-scoped team resolver.
 
 Given a raw user-supplied string and a target league, this module resolves
-the input to a canonical team record via two progressively looser stages:
+the input to a canonical team record via three progressively looser stages:
 
-  Stage 1 — Exact match against ``team_aliases`` (normalized input matches alias
-             exactly; league-scoped).
-  Stage 2 — pg_trgm trigram fuzzy match (``similarity > threshold``), ordered
+  Stage 1 — Exact match against ``team_aliases`` (normalized input matches
+             alias exactly; league-scoped).
+  Stage 2 — Normalized alias match (``normalize_input`` strips punctuation
+             and casefolds; league-scoped).
+  Stage 3 — pg_trgm trigram fuzzy match (``similarity > threshold``), ordered
              by similarity descending, league-scoped.
 
 A positive result is cached in Redis under ``resolve:{league}:{norm}`` (7-day
