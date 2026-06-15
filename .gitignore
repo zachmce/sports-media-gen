@@ -1,6 +1,10 @@
 # Secrets — never commit
 .env
 
+# Local planning / GSD workflow state — kept private, never published
+.planning/
+docs/PROJECT.prd
+
 # Python bytecode
 __pycache__/
 *.pyc
