@@ -19,7 +19,7 @@ from __future__ import annotations
 # Side-effect imports: each module decorates its function with @register so that
 # importing this package populates _REGISTRY for all style=0 generators.
 from . import logo, poster, thumb  # noqa: F401
-from .registry import GeneratorFn, get_generator, register
+from .registry import GeneratorFn, get_generator, register, registered_kinds
 from .types import DecodedAssets, TeamDict
 
 __all__ = [
@@ -28,4 +28,5 @@ __all__ = [
     "TeamDict",
     "get_generator",
     "register",
+    "registered_kinds",
 ]
