@@ -509,8 +509,8 @@ async def test_asset_loader_refetch_on_miss() -> None:
     )
 
     assert assets["away_logo"].mode == "RGBA"
-    # Verify re-cache was called with logo_cache_ttl for the away team's key
-    expected_key = f"logo:nba:{lakers_with_url['espn_id']}".encode()
+    # Verify re-cache called with logo_cache_ttl for the variant-suffixed key (D-08)
+    expected_key = f"logo:nba:{lakers_with_url['espn_id']}:default".encode()
     redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
 
 
@@ -699,3 +699,109 @@ async def test_load_one_logo_oversize_falls_back_to_placeholder(
     assert img.mode == "RGBA"
     # …and the global cap was never touched.
     assert before == Image.MAX_IMAGE_PIXELS
+
+
+# ---------------------------------------------------------------------------
+# LOGO-03: Variant fallback chain (D-05 / D-06 / D-08)
+# ---------------------------------------------------------------------------
+
+
+async def test_asset_loader_variant_fallback() -> None:
+    """Loader falls back dark→default when the requested variant is absent (LOGO-03).
+
+    Given: logo_variants has "dark" and "default" but NOT "scoreboard".
+    When:  load_assets is called with variant="scoreboard".
+    Then:  the loader fetches the "dark" href (first available fallback),
+           caches it under the variant-suffixed key "scoreboard", and decodes it.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from matchup_thumbs.assets.loader import load_assets
+    from matchup_thumbs.settings import settings
+
+    png_bytes = _make_synthetic_png((64, 64))
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)  # cache miss
+    redis.set = AsyncMock(return_value=None)
+
+    mock_response = MagicMock()
+    mock_response.content = png_bytes
+    mock_response.raise_for_status = MagicMock()
+
+    http_client = MagicMock()
+    http_client.get = AsyncMock(return_value=mock_response)
+
+    dark_href = "https://a.espncdn.com/logo_dark.png"
+    default_href = "https://a.espncdn.com/logo_default.png"
+    lakers_with_variants = {
+        **fixture_lakers(),
+        "logo_url": "https://a.espncdn.com/logo_legacy.png",
+        "logo_variants": {"dark": dark_href, "default": default_href},
+    }
+
+    assets = await load_assets(
+        away=lakers_with_variants,
+        home=fixture_clippers(),
+        redis=redis,
+        http_client=http_client,
+        league="nba",
+        settings=settings,
+        variant="scoreboard",
+    )
+
+    assert assets["away_logo"].mode == "RGBA"
+    # The loader should have fetched the "dark" fallback href (first available)
+    http_client.get.assert_any_call(dark_href)
+    # The result is cached under the *requested* variant key (not "dark")
+    expected_key = f"logo:nba:{lakers_with_variants['espn_id']}:scoreboard".encode()
+    redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
+
+
+async def test_asset_loader_fallback_to_logo_url() -> None:
+    """Loader falls back to legacy logo_url when logo_variants is None (LOGO-03, D-06).
+
+    Given: logo_variants is None (team seeded before Phase 8).
+    When:  load_assets is called with variant="default".
+    Then:  the loader fetches the legacy logo_url href and caches it under :default.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from matchup_thumbs.assets.loader import load_assets
+    from matchup_thumbs.settings import settings
+
+    png_bytes = _make_synthetic_png((64, 64))
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)  # cache miss
+    redis.set = AsyncMock(return_value=None)
+
+    mock_response = MagicMock()
+    mock_response.content = png_bytes
+    mock_response.raise_for_status = MagicMock()
+
+    http_client = MagicMock()
+    http_client.get = AsyncMock(return_value=mock_response)
+
+    legacy_href = "https://a.espncdn.com/logo_legacy.png"
+    lakers_no_variants = {
+        **fixture_lakers(),
+        "logo_url": legacy_href,
+        "logo_variants": None,  # no variant data (pre-Phase-8 row)
+    }
+
+    assets = await load_assets(
+        away=lakers_no_variants,
+        home=fixture_clippers(),
+        redis=redis,
+        http_client=http_client,
+        league="nba",
+        settings=settings,
+    )
+
+    assert assets["away_logo"].mode == "RGBA"
+    # Loader must have fetched the legacy logo_url
+    http_client.get.assert_any_call(legacy_href)
+    # Cached under the :default variant key
+    expected_key = f"logo:nba:{lakers_no_variants['espn_id']}:default".encode()
+    redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
