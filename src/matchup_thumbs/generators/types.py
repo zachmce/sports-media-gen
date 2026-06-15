@@ -20,10 +20,13 @@ class TeamDict(TypedDict):
 
     Field order and types match ``resolver._TEAM_COLUMNS``:
     ``t.id, t.league_id, t.slug, t.display_name, t.abbreviation,
-    t.primary_color, t.secondary_color, t.logo_url, t.espn_id``
+    t.primary_color, t.secondary_color, t.logo_url, t.espn_id,
+    t.logo_variants``
 
     Colors are ``#RRGGBB`` hex strings or ``None`` for unset teams (D-15).
     ``espn_id`` is Text (treated as opaque string per DB schema decision).
+    ``logo_variants`` is a JSONB column; psycopg3 auto-deserializes jsonb → dict
+    (no ``json.loads`` needed).  ``None`` when no variants have been seeded yet.
     """
 
     id: int
@@ -35,6 +38,7 @@ class TeamDict(TypedDict):
     secondary_color: str | None
     logo_url: str | None
     espn_id: str
+    logo_variants: dict[str, str] | None
 
 
 class DecodedAssets(TypedDict):
