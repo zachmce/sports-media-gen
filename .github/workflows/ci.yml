@@ -4,11 +4,11 @@ name: CI
 permissions: {}
 
 on:
-  push:
-    branches: [main]
+  # No push trigger: on push to main, publish.yml runs these same jobs via
+  # workflow_call below — adding push here would double every main-push CI run.
   pull_request:
     branches: [main]
-  workflow_call: {}  # enable reuse from publish.yml
+  workflow_call: {}  # reuse from publish.yml (push to main / version tags)
 
 jobs:
   lint:
