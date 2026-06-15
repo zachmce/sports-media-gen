@@ -81,6 +81,9 @@ services:
       - "${NGINX_HOST_PORT:-8080}:80"
     environment:
       NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+      # Restrict envsubst to ONLY this var so nginx runtime variables ($host,
+      # $remote_addr, …) and any future container env can never be substituted.
+      NGINX_ENVSUBST_FILTER: NGINX_TRUSTED_PROXY_CIDR
       NGINX_TRUSTED_PROXY_CIDR: ${NGINX_TRUSTED_PROXY_CIDR:-172.16.0.0/12}
     volumes:
       - ./nginx:/etc/nginx/templates:ro

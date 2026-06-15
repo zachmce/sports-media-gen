@@ -24,7 +24,12 @@ def test_nginx_kinds_match_generator_registry() -> None:
     Fails if a kind is removed from nginx's location regex OR if a kind is
     added to the registry without updating nginx — both directions caught (D-07).
     """
-    conf = (Path(__file__).parent.parent / "nginx" / "nginx.conf.template").read_text()
+    raw = (Path(__file__).parent.parent / "nginx" / "nginx.conf.template").read_text()
+    # Strip comment lines so a commented-out/anchor `location` block (allowed by
+    # D-06) can never shadow the live directive via a false-positive regex match.
+    conf = "\n".join(
+        line for line in raw.splitlines() if not line.lstrip().startswith("#")
+    )
     m = re.search(r"location\s+~\s+\^/.*?/\(([a-z|]+)\)\$", conf)
     assert m is not None, "Could not find kind alternation in nginx.conf.template"
     nginx_kinds = frozenset(m.group(1).split("|"))
