@@ -81,7 +81,15 @@ def _pg_conn() -> psycopg.Connection[psycopg.rows.TupleRow]:
 
 @pytest.fixture(scope="module", autouse=True)
 def _apply_and_teardown_migration() -> Generator[None]:
-    """Apply migrations before the module runs; downgrade to base afterwards."""
+    """Apply migrations before the module runs; restore head afterwards.
+
+    Teardown re-applies ``upgrade head`` rather than ``downgrade base`` so this
+    module does not drop the shared schema that other DB-integration modules
+    (test_resolver, test_seed) depend on — those run after this one in
+    alphabetical collection order and expect the schema the CI workflow's
+    pre-pytest ``alembic upgrade head`` step established.  Downgrade-to-base is
+    still exercised by the setup path below.
+    """
     if not _PG_AVAILABLE:
         yield
         return
@@ -95,7 +103,10 @@ def _apply_and_teardown_migration() -> Generator[None]:
         f"stderr: {result.stderr}"
     )
     yield
-    _run_alembic("downgrade", "base")
+    # Leave the database migrated at head — do NOT downgrade to base here, or
+    # later test modules (collected alphabetically after this one) lose the
+    # schema they require.  Setup above already exercises downgrade-to-base.
+    _run_alembic("upgrade", "head")
 
 
 # ---------------------------------------------------------------------------
