@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 from typing import cast
 
+import anyio
 import httpx
 import structlog
 from PIL import Image
@@ -38,6 +39,35 @@ logger = structlog.get_logger()
 # Logos from the ESPN CDN are never legitimately larger than a few hundred
 # pixels, so 4096×4096 is a generous but sane upper limit.
 _MAX_LOGO_PIXELS: int = 4096 * 4096
+
+
+def _decode_logo_image(raw: bytes, max_pixels: int) -> Image.Image:
+    """Decode logo bytes to an RGBA ``PIL.Image`` with a decompression-bomb cap.
+
+    CR-01 (thread safety): the pixel cap is enforced with an explicit
+    ``width * height`` check rather than by mutating the process-global
+    ``Image.MAX_IMAGE_PIXELS``.  ``Image.open`` only parses the header (it does
+    not decode pixels), so ``.size`` is available before the expensive
+    ``.convert`` — letting us reject an oversized blob without ever touching
+    shared global state.  This makes the function safe to run concurrently from
+    multiple worker threads.
+
+    CR-02 (no event-loop blocking): this helper is synchronous and CPU-bound; it
+    is dispatched via ``anyio.to_thread.run_sync`` so the decode never runs on
+    the event loop.
+
+    Raises:
+        PIL.Image.DecompressionBombError: if the declared pixel count exceeds
+            ``max_pixels``.
+        Exception: any Pillow error from malformed bytes (the async caller
+            degrades these to the placeholder).
+    """
+    img = Image.open(io.BytesIO(raw))
+    if img.width * img.height > max_pixels:
+        raise Image.DecompressionBombError(
+            f"logo pixel count {img.width * img.height} exceeds limit {max_pixels}"
+        )
+    return img.convert("RGBA")
 
 
 async def _load_one_logo(
@@ -89,13 +119,12 @@ async def _load_one_logo(
     if raw is None:
         raw = get_placeholder_logo()
 
-    # Decode bytes → PIL.Image with decompression-bomb protection (T-03-09).
-    # Wrap in try/except so a corrupted cached entry degrades to placeholder
+    # Decode bytes → PIL.Image off the event loop (CR-02) with thread-safe
+    # decompression-bomb protection (CR-01, T-03-09).  Wrap in try/except so a
+    # corrupted cached entry or oversized blob degrades to the placeholder
     # rather than crashing the pipeline.
-    original_max = Image.MAX_IMAGE_PIXELS
-    Image.MAX_IMAGE_PIXELS = _MAX_LOGO_PIXELS
     try:
-        img = Image.open(io.BytesIO(raw)).convert("RGBA")
+        img = await anyio.to_thread.run_sync(_decode_logo_image, raw, _MAX_LOGO_PIXELS)
     except Exception as decode_exc:
         await logger.aerror(
             "logo_decode_failed",
@@ -105,9 +134,9 @@ async def _load_one_logo(
         )
         # Terminal fallback: decode the placeholder (it is always valid PNG).
         placeholder_raw = get_placeholder_logo()
-        img = Image.open(io.BytesIO(placeholder_raw)).convert("RGBA")
-    finally:
-        Image.MAX_IMAGE_PIXELS = original_max
+        img = await anyio.to_thread.run_sync(
+            _decode_logo_image, placeholder_raw, _MAX_LOGO_PIXELS
+        )
 
     return img
 

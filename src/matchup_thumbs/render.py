@@ -424,20 +424,24 @@ def post_cache_transform(
     if requested_w is not None and requested_w <= 0:
         raise BadTransformParam(param="w", value=str(requested_w))
 
-    # CR-02: apply the same decompression-bomb discipline here as in the asset
-    # loader (T-03-09).  Although png_bytes normally comes from our own render
-    # cache, the function is a documented public entrypoint and a future caller
-    # or poisoned cache entry could supply adversarial bytes.
-    original_max = Image.MAX_IMAGE_PIXELS
-    Image.MAX_IMAGE_PIXELS = _MAX_RENDER_PIXELS
-    try:
-        src: Image.Image = Image.open(io.BytesIO(png_bytes))
-        src.load()  # force decode so the pixel cap is enforced now
-    except Exception:
-        Image.MAX_IMAGE_PIXELS = original_max
-        raise
-    finally:
-        Image.MAX_IMAGE_PIXELS = original_max
+    # Apply the same decompression-bomb discipline here as in the asset loader
+    # (T-03-09).  Although png_bytes normally comes from our own render cache,
+    # the function is a documented public entrypoint and a future caller or
+    # poisoned cache entry could supply adversarial bytes.
+    #
+    # CR-01 (thread safety): enforce the cap with an explicit width*height check
+    # instead of mutating the process-global Image.MAX_IMAGE_PIXELS.  This
+    # function is CPU-bound and dispatched via anyio.to_thread.run_sync from the
+    # route handler, so concurrent renders would race on that global; the
+    # explicit check touches no shared state.  Image.open parses only the header
+    # (no pixel decode), so .size is known before the expensive src.load().
+    src: Image.Image = Image.open(io.BytesIO(png_bytes))
+    pixels = src.width * src.height
+    if pixels > _MAX_RENDER_PIXELS:
+        raise Image.DecompressionBombError(
+            f"image pixel count {pixels} exceeds limit {_MAX_RENDER_PIXELS}"
+        )
+    src.load()  # force decode now that the declared size is known-safe
 
     img: Image.Image = src
 

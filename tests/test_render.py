@@ -631,3 +631,71 @@ async def test_singleflight_degrade_writes_cache() -> None:
     assert len(cache_writes) >= 1, (
         "Degraded path must write rendered bytes to the render cache (WR-01)"
     )
+
+
+# ---------------------------------------------------------------------------
+# CR-01 / CR-02: Pillow concurrency hardening (render-pillow-concurrency)
+#
+# The decompression-bomb cap must be enforced WITHOUT mutating the process-
+# global Image.MAX_IMAGE_PIXELS (thread-unsafe under concurrent renders), and
+# logo decode must run off the event loop.
+# ---------------------------------------------------------------------------
+
+
+def test_post_cache_transform_rejects_oversize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """post_cache_transform raises DecompressionBombError when the declared
+    pixel count exceeds the cap — enforced by an explicit check, not the global
+    (CR-01)."""
+    import matchup_thumbs.render as render_mod
+
+    # Lower the cap so a cheap 100×100 (10 000 px) image trips it.
+    monkeypatch.setattr(render_mod, "_MAX_RENDER_PIXELS", 100)
+    png = _make_synthetic_png((100, 100))
+
+    with pytest.raises(Image.DecompressionBombError):
+        render_mod.post_cache_transform(png, kind="thumb", fmt="png", requested_w=None)
+
+
+def test_post_cache_transform_does_not_mutate_global() -> None:
+    """post_cache_transform leaves the process-global Image.MAX_IMAGE_PIXELS
+    untouched (CR-01 — no global save/restore race)."""
+    from matchup_thumbs.render import post_cache_transform
+
+    before = Image.MAX_IMAGE_PIXELS
+    png = _make_synthetic_png((120, 80))
+    post_cache_transform(png, kind="thumb", fmt="png", requested_w=None)
+    assert before == Image.MAX_IMAGE_PIXELS
+
+
+async def test_load_one_logo_oversize_falls_back_to_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_load_one_logo degrades to the placeholder when the decoded logo exceeds
+    the pixel cap, and never mutates the global (CR-01).  The decode is
+    dispatched off the event loop via anyio.to_thread.run_sync (CR-02)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import matchup_thumbs.assets.loader as loader_mod
+    from matchup_thumbs.assets.loader import _load_one_logo
+    from matchup_thumbs.settings import settings
+
+    # Cap sits between the 512×512 placeholder (262 144 px, must still decode)
+    # and the 600×600 cached logo (360 000 px, must be rejected as oversized).
+    monkeypatch.setattr(loader_mod, "_MAX_LOGO_PIXELS", 300_000)
+    before = Image.MAX_IMAGE_PIXELS
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=_make_synthetic_png((600, 600)))
+    redis.set = AsyncMock(return_value=None)
+    http_client = MagicMock()
+
+    img = await _load_one_logo(
+        fixture_lakers(), redis, http_client, league="nba", settings=settings
+    )
+
+    # Placeholder fallback still yields a usable RGBA image…
+    assert img.mode == "RGBA"
+    # …and the global cap was never touched.
+    assert before == Image.MAX_IMAGE_PIXELS
