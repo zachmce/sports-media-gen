@@ -368,6 +368,143 @@ def test_logo_color_equals_background_treatment_required() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 2: Contrast-aware background fill in thumb and poster generators (D-02)
+# ---------------------------------------------------------------------------
+
+
+def test_thumb_uses_decision_background_rgb() -> None:
+    """thumb generator fills away/home halves from decision.background_rgb (D-02, CTR-01).
+
+    Supplies a decision whose background_rgb differs from the team's primary_color,
+    verifying the generator reads the decision rather than calling hex_to_rgb(primary).
+    """
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+    from tests.conftest import make_decision
+
+    # Use a background color that differs clearly from the Lakers primary (#552583 = 85,37,131)
+    # We pick bright red (200, 0, 0) as away background via the decision.
+    forced_bg: tuple[int, int, int] = (200, 0, 0)
+    assets = fixture_decoded_assets()
+    assets["away_decision"] = make_decision(background_rgb=forced_bg)
+
+    img = generate_thumb_style0(fixture_lakers(), fixture_clippers(), assets)
+
+    # Top-left corner of the thumb is solidly in the away region; should be forced_bg.
+    pixel = img.getpixel((0, 0))
+    assert pixel[:3] == forced_bg, (
+        f"Expected away background {forced_bg!r} from decision, got {pixel[:3]!r}"
+    )
+
+
+def test_poster_uses_decision_background_rgb() -> None:
+    """poster generator fills away/home bands from decision.background_rgb (D-02, CTR-01).
+
+    Supplies a decision whose background_rgb differs from the team's primary_color,
+    verifying the generator reads the decision rather than calling hex_to_rgb(primary).
+    """
+    from matchup_thumbs.generators.poster import generate_poster_style0
+    from tests.conftest import make_decision
+
+    # Use bright green (0, 180, 0) as away background via the decision.
+    forced_bg: tuple[int, int, int] = (0, 180, 0)
+    assets = fixture_decoded_assets()
+    assets["away_decision"] = make_decision(background_rgb=forced_bg)
+
+    img = generate_poster_style0(fixture_lakers(), fixture_clippers(), assets)
+
+    # Top-left corner of the poster is solidly in the away band.
+    pixel = img.getpixel((0, 0))
+    assert pixel[:3] == forced_bg, (
+        f"Expected away background {forced_bg!r} from decision, got {pixel[:3]!r}"
+    )
+
+
+def test_thumb_applies_outline_treatment() -> None:
+    """thumb generator applies _apply_outline when decision.treatment == OUTLINE (D-04).
+
+    Uses a fully-transparent logo; after OUTLINE treatment, adjacent pixels must
+    be opaque (the halo exists). Without the OUTLINE pass, the canvas area where
+    the (transparent) logo would be pasted has no halo, but we can't check that
+    in the canvas directly since a transparent paste changes nothing. Instead we
+    check that a fully-opaque logo with OUTLINE treatment leaves a wider visible
+    border than a logo without OUTLINE (size of logo footprint expands).
+
+    Simpler approach: use a tiny solid logo; with OUTLINE the pixels adjacent to
+    the logo region in the canvas change color (halo bleeds into the background).
+    Without OUTLINE, those pixels remain the background color.
+    """
+    from matchup_thumbs.contrast import Treatment
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+    from tests.conftest import make_decision
+
+    # Build a 5x5 red logo on a transparent 30x30 canvas.
+    small_logo = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    mark = Image.new("RGBA", (5, 5), (255, 50, 50, 255))
+    small_logo.paste(mark, (12, 12))
+
+    # Use a near-white background so the halo will be black (clearly different).
+    bg_white: tuple[int, int, int] = (240, 240, 240)
+    assets_with_outline = fixture_decoded_assets()
+    assets_with_outline["away_logo"] = small_logo
+    assets_with_outline["away_decision"] = make_decision(
+        background_rgb=bg_white, treatment=Treatment.OUTLINE
+    )
+
+    assets_no_outline = fixture_decoded_assets()
+    assets_no_outline["away_logo"] = small_logo
+    assets_no_outline["away_decision"] = make_decision(
+        background_rgb=bg_white, treatment=None  # Treatment.NONE
+    )
+
+    img_with = generate_thumb_style0(fixture_lakers(), fixture_clippers(), assets_with_outline)
+    img_without = generate_thumb_style0(
+        fixture_lakers(), fixture_clippers(), assets_no_outline
+    )
+
+    # Images should differ when OUTLINE is applied vs not
+    assert img_with.tobytes() != img_without.tobytes(), (
+        "Thumb with OUTLINE should differ from thumb without OUTLINE"
+    )
+
+
+def test_poster_applies_outline_treatment() -> None:
+    """poster generator applies _apply_outline when decision.treatment == OUTLINE (D-04).
+
+    Verifies the OUTLINE path produces a different image than NONE for the same logo.
+    """
+    from matchup_thumbs.contrast import Treatment
+    from matchup_thumbs.generators.poster import generate_poster_style0
+    from tests.conftest import make_decision
+
+    small_logo = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    mark = Image.new("RGBA", (5, 5), (255, 50, 50, 255))
+    small_logo.paste(mark, (12, 12))
+
+    bg_white: tuple[int, int, int] = (240, 240, 240)
+
+    assets_with_outline = fixture_decoded_assets()
+    assets_with_outline["away_logo"] = small_logo
+    assets_with_outline["away_decision"] = make_decision(
+        background_rgb=bg_white, treatment=Treatment.OUTLINE
+    )
+
+    assets_no_outline = fixture_decoded_assets()
+    assets_no_outline["away_logo"] = small_logo
+    assets_no_outline["away_decision"] = make_decision(
+        background_rgb=bg_white, treatment=None  # Treatment.NONE
+    )
+
+    img_with = generate_poster_style0(fixture_lakers(), fixture_clippers(), assets_with_outline)
+    img_without = generate_poster_style0(
+        fixture_lakers(), fixture_clippers(), assets_no_outline
+    )
+
+    assert img_with.tobytes() != img_without.tobytes(), (
+        "Poster with OUTLINE should differ from poster without OUTLINE"
+    )
+
+
+# ---------------------------------------------------------------------------
 # GEN-06: Golden-image regression (must run inside Docker image per GEN-06)
 # ---------------------------------------------------------------------------
 
