@@ -75,3 +75,4 @@ class DecodedAssets(TypedDict):
     home_logo: Image.Image
     away_decision: ContrastDecision  # NEW — Phase 10 D-02
     home_decision: ContrastDecision  # NEW — Phase 10 D-02
+    league_logo: Image.Image | None  # Phase 11 (LGL-04, D-08)

@@ -35,6 +35,10 @@ class Settings(BaseSettings):
 
     # ESPN integration
     espn_base_url: str = "https://site.api.espn.com"
+    # ESPN core API base — DISTINCT from espn_base_url (site.api.espn.com).
+    # The core API hosts league-root objects including the inline `logos` array
+    # (LGL-01, D-01, RESEARCH Pitfall 2).  Never conflate the two base URLs.
+    espn_core_api_base_url: str = "https://sports.core.api.espn.com"
     espn_request_timeout: float = 10.0
     espn_semaphore_size: int = 5  # D-08: conservative starting point
     espn_jitter_max: float = 0.5  # seconds; random delay between CDN logo fetches

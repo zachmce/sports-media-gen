@@ -479,11 +479,14 @@ async def _render_and_encode(
     )
 
     # Enrich DecodedAssets with both logos and decisions (D-02).
+    # Phase 11: league_logo wired in by the load_league_logo call added in 11-03.
+    # Set to None here so the TypedDict contract is satisfied until 11-03 lands.
     assets: DecodedAssets = DecodedAssets(
         away_logo=away_logo_final,
         home_logo=home_logo_final,
         away_decision=away_decision,
         home_decision=home_decision,
+        league_logo=None,  # Phase 11 (D-08) — fully wired in 11-03
     )
 
     gen_fn = get_generator(kind, style)
