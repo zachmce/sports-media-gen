@@ -202,6 +202,9 @@ class SelectionReason(Enum):
     """
 
     PRIMARY_OK = "primary_ok"
+    # Default logo clashes with primary, but the white ("dark") variant contrasts
+    # it — keep the vibrant primary background and recolour the logo white (D-11).
+    PRIMARY_LIGHT_VARIANT = "primary_light_variant"
     SWAPPED_TO_SECONDARY = "swapped_to_secondary"
     TREATMENT_REQUIRED = "treatment_required"
     NULL_COLOR = (
@@ -263,6 +266,12 @@ _VARIANT_DARK: str = "dark"
 # ---------------------------------------------------------------------------
 
 _LIGHT_BACKGROUND_LUMINANCE: float = 0.5  # backgrounds at or above this are "light"
+
+# The ESPN "dark" variant is, by convention, a WHITE logo (built to sit on dark
+# backgrounds).  The engine models it as pure white so it can reason about the
+# variant's contrast against a candidate background WITHOUT having loaded the
+# variant image (the actual bytes are re-checked downstream by the render layer).
+_WHITE_LOGO_RGB: tuple[int, int, int] = (255, 255, 255)
 
 
 # ---------------------------------------------------------------------------
@@ -338,21 +347,30 @@ def decide_contrast(
     Pitfall 4, D-02).  The logo's representative colour (``repr_rgb``) should be
     obtained from ``dominant_color()`` before calling this function (D-03).
 
-    Decision logic (CTR-03, CTR-04):
-    1. If the primary colour achieves contrast >= *threshold* against ``repr_rgb``
-       → use primary background, ``Treatment.NONE``, ``SelectionReason.PRIMARY_OK``.
-    2. Else if the secondary colour achieves contrast >= *threshold*
-       → use secondary background, ``Treatment.NONE``,
+    Decision logic (CTR-03, CTR-04) — vibrant-first (D-11): the team's PRIMARY
+    colour is the preferred background because it keeps the matchup on-brand; the
+    engine only abandons it when no available logo can be made legible on it.
+    1. If the default logo achieves contrast >= *threshold* against the primary
+       → primary background, default logo, ``Treatment.NONE``,
+       ``SelectionReason.PRIMARY_OK``.
+    2. Else if a white ("dark") variant exists AND white achieves contrast
+       >= *threshold* against the primary → KEEP the primary background and
+       recolour the logo white, ``Treatment.NONE``,
+       ``SelectionReason.PRIMARY_LIGHT_VARIANT``.  This is what renders crimson
+       teams (Alabama, Indiana) as a white logo on their crimson background
+       instead of a washed-out white background (the previous behaviour).
+    3. Else if the secondary colour achieves contrast >= *threshold* against the
+       default logo → swap to the secondary background, ``Treatment.NONE``,
        ``SelectionReason.SWAPPED_TO_SECONDARY``.
-    3. Else (neither clears the threshold, CTR-04)
-       → pick whichever of the two has the higher ratio as background,
+    4. Else (neither background clears the threshold, CTR-04)
+       → pick whichever of primary/secondary has the higher ratio as background,
        ``Treatment.OUTLINE`` (D-10 last-resort default),
        ``SelectionReason.TREATMENT_REQUIRED``.
        Treatment.NONE is NEVER returned in this branch.
 
     The ``achieved_ratio`` field on the returned ``ContrastDecision`` records the
-    ratio of the **chosen** background (not the maximum of the two), per RESEARCH
-    Open Question 3.
+    ratio of the **chosen logo** against the **chosen background** (e.g. white vs
+    primary in branch 2), per RESEARCH Open Question 3.
 
     Args:
         primary_rgb:   Team's primary colour as an (R, G, B) 3-tuple.
@@ -370,43 +388,68 @@ def decide_contrast(
         ratio, variant recommendation, treatment, and selection reason.
     """
     primary_ratio = contrast_ratio(repr_rgb, primary_rgb)
-    secondary_ratio = contrast_ratio(repr_rgb, secondary_rgb)
 
+    # Branch 1 — vibrant primary background, default (full-colour) logo.
     if primary_ratio >= threshold:
+        return ContrastDecision(
+            background_rgb=primary_rgb,
+            background_source="primary",
+            achieved_ratio=primary_ratio,
+            recommended_variant=_recommend_variant(
+                logo_variants, "primary", primary_rgb
+            ),
+            treatment=Treatment.NONE,
+            reason=SelectionReason.PRIMARY_OK,
+        )
+
+    # Branch 2 — the default logo clashes with the primary, but a white ("dark")
+    # variant exists and contrasts the primary.  Keep the vibrant primary
+    # background and recolour the logo white rather than swapping to the
+    # secondary (D-11).  ``_WHITE_LOGO_RGB`` models the variant's colour; the
+    # render layer re-checks the actual loaded bytes (prong 2).
+    if logo_variants and _VARIANT_DARK in logo_variants:
+        white_on_primary = contrast_ratio(_WHITE_LOGO_RGB, primary_rgb)
+        if white_on_primary >= threshold:
+            return ContrastDecision(
+                background_rgb=primary_rgb,
+                background_source="primary",
+                achieved_ratio=white_on_primary,
+                recommended_variant=_VARIANT_DARK,
+                treatment=Treatment.NONE,
+                reason=SelectionReason.PRIMARY_LIGHT_VARIANT,
+            )
+
+    # Branch 3 — primary cannot be made legible with the available logos; swap
+    # to the secondary background if the default logo contrasts it.
+    secondary_ratio = contrast_ratio(repr_rgb, secondary_rgb)
+    if secondary_ratio >= threshold:
+        return ContrastDecision(
+            background_rgb=secondary_rgb,
+            background_source="secondary",
+            achieved_ratio=secondary_ratio,
+            recommended_variant=_recommend_variant(
+                logo_variants, "secondary", secondary_rgb
+            ),
+            treatment=Treatment.NONE,
+            reason=SelectionReason.SWAPPED_TO_SECONDARY,
+        )
+
+    # Branch 4 — CTR-04: neither background clears the threshold with the default
+    # logo.  Pick the higher-contrast background and force OUTLINE — NEVER return
+    # Treatment.NONE here (that is the silent-pass bug CTR-04 fixes, D-10).
+    if primary_ratio >= secondary_ratio:
         bg = primary_rgb
         source = "primary"
         chosen_ratio = primary_ratio
-        treatment = Treatment.NONE
-        reason = SelectionReason.PRIMARY_OK
-    elif secondary_ratio >= threshold:
+    else:
         bg = secondary_rgb
         source = "secondary"
         chosen_ratio = secondary_ratio
-        treatment = Treatment.NONE
-        reason = SelectionReason.SWAPPED_TO_SECONDARY
-    else:
-        # CTR-04: neither colour clears the threshold.
-        # Pick the higher-contrast of the two as background — at least we minimise
-        # the problem.  NEVER return Treatment.NONE here (that is the silent-pass
-        # bug CTR-04 fixes).  Use OUTLINE as the last-resort default (D-10).
-        if primary_ratio >= secondary_ratio:
-            bg = primary_rgb
-            source = "primary"
-            chosen_ratio = primary_ratio
-        else:
-            bg = secondary_rgb
-            source = "secondary"
-            chosen_ratio = secondary_ratio
-        treatment = Treatment.OUTLINE
-        reason = SelectionReason.TREATMENT_REQUIRED
-
-    variant = _recommend_variant(logo_variants, source, bg)
-
     return ContrastDecision(
         background_rgb=bg,
         background_source=source,
         achieved_ratio=chosen_ratio,
-        recommended_variant=variant,
-        treatment=treatment,
-        reason=reason,
+        recommended_variant=_recommend_variant(logo_variants, source, bg),
+        treatment=Treatment.OUTLINE,
+        reason=SelectionReason.TREATMENT_REQUIRED,
     )

@@ -334,15 +334,25 @@ async def _variant_contrasts_or_fallback(
     ratio = contrast_ratio(loaded_repr, decision.background_rgb)
     if ratio >= settings.min_contrast_ratio:
         return loaded_logo
-    # The loaded variant is invisible (or near-invisible) against the chosen
-    # background.  Fall back to the default logo and surface it — no silent
-    # failure (AGENTS.md).
+    # The loaded variant is below the bar against the chosen background.  Fall back
+    # to the default logo ONLY if it actually contrasts better — otherwise keep the
+    # variant (least-bad).  This matters for the vibrant primary path, where the
+    # default logo is the one that clashed with the background in the first place,
+    # so a blind fallback could swap to an equally-bad or worse image.
+    default_repr: tuple[int, int, int] = await anyio.to_thread.run_sync(
+        dominant_color, default_logo
+    )
+    default_ratio = contrast_ratio(default_repr, decision.background_rgb)
+    if default_ratio <= ratio:
+        return loaded_logo
+    # Surface the fallback — no silent failure (AGENTS.md).
     await logger.awarning(
         "variant_contrast_recheck_fallback",
         league=league,
         espn_id=espn_id,
         variant=decision.recommended_variant,
         achieved_ratio=round(ratio, 3),
+        default_ratio=round(default_ratio, 3),
         min_ratio=settings.min_contrast_ratio,
         background_rgb=decision.background_rgb,
     )
