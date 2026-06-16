@@ -14,6 +14,8 @@ from typing import TypedDict
 
 from PIL import Image
 
+from ..contrast import ContrastDecision
+
 
 class TeamDict(TypedDict):
     """Resolved team record as returned by resolver.resolve_team().
@@ -42,14 +44,19 @@ class TeamDict(TypedDict):
 
 
 class DecodedAssets(TypedDict):
-    """Pre-decoded PIL.Image logos for both matchup teams.
+    """Pre-decoded PIL.Image logos and contrast decisions for both matchup teams.
 
-    Produced by the asset loader (assets/loader.py) which is the only I/O
-    component in the render pipeline.  Generators receive these already-decoded
-    images and perform no further I/O (GEN-04).
+    Produced by the asset loader and contrast orchestration layer
+    (assets/loader.py + render.py) which are the only I/O components in the
+    render pipeline.  Generators receive these already-decoded images and
+    per-team contrast decisions and perform no further I/O (GEN-04).
 
     Both images are RGBA mode (loader calls ``.convert("RGBA")``).
+    The contrast decisions (D-02, Phase 10) carry the chosen background colour,
+    variant recommendation, and treatment directive for each team.
     """
 
     away_logo: Image.Image
     home_logo: Image.Image
+    away_decision: ContrastDecision  # NEW — Phase 10 D-02
+    home_decision: ContrastDecision  # NEW — Phase 10 D-02

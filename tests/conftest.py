@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
 from matchup_thumbs.generators.types import DecodedAssets
 from matchup_thumbs.main import app
 from matchup_thumbs.settings import Settings
@@ -195,15 +196,44 @@ def fixture_clippers() -> dict[str, Any]:
     }
 
 
-def fixture_decoded_assets() -> DecodedAssets:
-    """Return a DecodedAssets dict with two 200×200 solid-colour RGBA logos.
+def make_decision(
+    background_rgb: tuple[int, int, int] = (85, 37, 131),  # Lakers purple default
+    background_source: str = "primary",
+    achieved_ratio: float = 6.1,
+    recommended_variant: str | None = None,
+    treatment: Treatment | None = None,
+    reason: SelectionReason | None = None,
+) -> ContrastDecision:
+    """Return a ContrastDecision with sensible defaults for test fixtures.
 
-    Uses Lakers purple and Clippers red so colour-fallback tests can
-    distinguish team regions in the generated image.  No ESPN call needed.
+    Phase 10 D-02.  Override only the fields relevant to the test being written.
+    treatment defaults to Treatment.NONE; reason defaults to SelectionReason.PRIMARY_OK.
+    """
+    return ContrastDecision(
+        background_rgb=background_rgb,
+        background_source=background_source,
+        achieved_ratio=achieved_ratio,
+        recommended_variant=recommended_variant,
+        treatment=treatment if treatment is not None else Treatment.NONE,
+        reason=reason if reason is not None else SelectionReason.PRIMARY_OK,
+    )
+
+
+def fixture_decoded_assets() -> DecodedAssets:
+    """Return a DecodedAssets dict with logos and default ContrastDecisions.
+
+    Phase 10 D-02.  Uses Lakers purple and Clippers red so colour-fallback
+    tests can distinguish team regions in the generated image.  No ESPN call
+    needed.
     """
     away_logo = Image.new("RGBA", (200, 200), (85, 37, 131, 255))  # Lakers purple
     home_logo = Image.new("RGBA", (200, 200), (200, 16, 46, 255))  # Clippers red
-    return DecodedAssets(away_logo=away_logo, home_logo=home_logo)
+    return DecodedAssets(
+        away_logo=away_logo,
+        home_logo=home_logo,
+        away_decision=make_decision(background_rgb=(85, 37, 131)),   # Lakers purple
+        home_decision=make_decision(background_rgb=(200, 16, 46)),   # Clippers red
+    )
 
 
 @pytest.fixture
