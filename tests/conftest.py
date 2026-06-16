@@ -233,6 +233,7 @@ def fixture_decoded_assets() -> DecodedAssets:
         home_logo=home_logo,
         away_decision=make_decision(background_rgb=(85, 37, 131)),  # Lakers purple
         home_decision=make_decision(background_rgb=(200, 16, 46)),  # Clippers red
+        league_logo=None,  # Phase 11 (D-08) — not yet consumed by generators
     )
 
 

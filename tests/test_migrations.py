@@ -120,8 +120,8 @@ def test_alembic_upgrade_head() -> None:
     # The module fixture already ran upgrade; just verify the current revision.
     result = _run_alembic("current")
     assert result.returncode == 0, f"alembic current failed:\n{result.stderr}"
-    assert "0002" in result.stdout or "0002" in result.stderr, (
-        f"Expected revision 0002 to be current.\n"
+    assert "0003" in result.stdout or "0003" in result.stderr, (
+        f"Expected revision 0003 to be current.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
@@ -294,3 +294,104 @@ def test_unique_constraint_scope_per_league() -> None:
                     (team_id_a, league_id_a),
                 )
         conn.rollback()  # Clean up test rows
+
+
+# ---------------------------------------------------------------------------
+# Migration 0003 — leagues logo columns (LGL-02)
+# ---------------------------------------------------------------------------
+
+
+def test_migration_0003_chains_off_0002() -> None:
+    """LGL-02: migration 0003 declares down_revision='0002' (chain integrity).
+
+    This test does NOT require a live Postgres — it reads the migration file
+    directly so it always runs and guards against revision-chain breakage
+    (RESEARCH Pitfall 6).
+    """
+    import ast
+    import pathlib
+
+    migration_path = (
+        pathlib.Path(__file__).parent.parent
+        / "migrations"
+        / "versions"
+        / "0003_add_leagues_logo_columns.py"
+    )
+    assert migration_path.exists(), f"Migration file not found: {migration_path}"
+
+    tree = ast.parse(migration_path.read_text())
+    # Alembic uses type-annotated assignments: revision: str = "0003"
+    # These are ast.AnnAssign nodes, not ast.Assign.
+    assigns = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            assigns[node.target.id] = node.value
+
+    revision_node = assigns.get("revision")
+    down_revision_node = assigns.get("down_revision")
+
+    assert revision_node is not None, "revision not found in 0003 migration"
+    assert down_revision_node is not None, "down_revision not found in 0003 migration"
+
+    # ast.Constant for string literals
+    assert isinstance(revision_node, ast.Constant), "revision must be a string literal"
+    assert isinstance(down_revision_node, ast.Constant), (
+        "down_revision must be a string literal"
+    )
+
+    assert revision_node.value == "0003", (
+        f"Expected revision='0003', got '{revision_node.value}'"
+    )
+    assert down_revision_node.value == "0002", (
+        f"Expected down_revision='0002', got '{down_revision_node.value}' "
+        "(RESEARCH Pitfall 6: must chain 0001→0002→0003, not skip 0002)"
+    )
+
+
+@pg_required
+def test_migration_0003_leagues_logo_columns_exist() -> None:
+    """LGL-02: after upgrade head, leagues.logo_url and leagues.logo_variants exist."""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_name = 'leagues'
+              AND column_name IN ('logo_url', 'logo_variants')
+            ORDER BY column_name
+            """
+        )
+        rows = cur.fetchall()
+
+    found = {row[0]: (row[1], row[2], row[3]) for row in rows}
+
+    # logo_url: Text nullable, no server_default
+    assert "logo_url" in found, (
+        "leagues.logo_url column does not exist after migration 0003"
+    )
+    logo_url_type, logo_url_nullable, _ = found["logo_url"]
+    assert logo_url_type == "text", (
+        f"Expected leagues.logo_url data_type='text', got '{logo_url_type}'"
+    )
+    assert logo_url_nullable == "YES", (
+        f"Expected leagues.logo_url to be nullable, got '{logo_url_nullable}'"
+    )
+
+    # logo_variants: JSONB nullable with server_default '{}'
+    assert "logo_variants" in found, (
+        "leagues.logo_variants column does not exist after migration 0003"
+    )
+    logo_var_type, logo_var_nullable, logo_var_default = found["logo_variants"]
+    assert logo_var_type == "jsonb", (
+        f"Expected logo_variants data_type='jsonb', got '{logo_var_type}'"
+    )
+    assert logo_var_nullable == "YES", (
+        f"Expected logo_variants to be nullable, got '{logo_var_nullable}'"
+    )
+    assert logo_var_default is not None and "'{}'" in logo_var_default, (
+        f"Expected server_default '{{}}' for logo_variants, got '{logo_var_default}'"
+    )
