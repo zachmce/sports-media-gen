@@ -256,14 +256,14 @@ def test_apply_outline_preserves_size() -> None:
 
 
 def test_apply_outline_halo_present() -> None:
-    """_apply_outline makes previously-transparent border pixels opaque (halo ring) (D-07).
+    """_apply_outline makes transparent border pixels opaque (halo ring) (D-07).
 
     A small solid mark placed in the center of a transparent canvas should gain
     a visible halo of opaque pixels around its original border after _apply_outline.
     """
     from matchup_thumbs.generators._outline import _apply_outline
 
-    # Build a logo: 10x10 opaque mark, surrounded by transparent padding on a 30x30 canvas
+    # Build a logo: 10x10 opaque mark, surrounded by transparent padding on 30x30.
     canvas = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
     inner = Image.new("RGBA", (10, 10), (200, 50, 50, 255))
     canvas.paste(inner, (10, 10))
@@ -290,11 +290,12 @@ def test_apply_outline_halo_color_dark_background() -> None:
     result = _apply_outline(logo, background_rgb=dark_bg)
 
     # Find an opaque pixel that is NOT part of the original mark (the halo ring).
-    # The original mark occupies (10..109, 10..109) in a 120x120 canvas (per _make_solid_logo).
-    # Check pixel (9, 9) — one pixel outside the mark; after dilation it should be white (255,255,255).
+    # The original mark occupies (10..109, 10..109) in a 120x120 canvas (per
+    # _make_solid_logo). Check pixel (9, 9) — one pixel outside the mark; after
+    # dilation it should be white (255,255,255).
     halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
     if halo_pixel[3] > 0:  # only check color if the pixel is actually in the halo
-        r, g, b = halo_pixel[0], halo_pixel[1], halo_pixel[2]
+        r = halo_pixel[0]
         assert r > 128, f"Expected white halo on dark background, got r={r}"
 
 
@@ -310,7 +311,7 @@ def test_apply_outline_halo_color_light_background() -> None:
     # Check adjacent pixel after dilation — should be dark (halo is black)
     halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
     if halo_pixel[3] > 0:
-        r, g, b = halo_pixel[0], halo_pixel[1], halo_pixel[2]
+        r = halo_pixel[0]
         assert r < 128, f"Expected black halo on light background, got r={r}"
 
 
@@ -383,7 +384,7 @@ def test_logo_color_equals_background_treatment_required() -> None:
 
 
 def test_thumb_uses_decision_background_rgb() -> None:
-    """thumb generator fills away/home halves from decision.background_rgb (D-02, CTR-01).
+    """thumb generator fills away/home halves from decision.background_rgb (D-02).
 
     Supplies a decision whose background_rgb differs from the team's primary_color,
     verifying the generator reads the decision rather than calling hex_to_rgb(primary).
@@ -391,7 +392,7 @@ def test_thumb_uses_decision_background_rgb() -> None:
     from matchup_thumbs.generators.thumb import generate_thumb_style0
     from tests.conftest import make_decision
 
-    # Use a background color that differs clearly from the Lakers primary (#552583 = 85,37,131)
+    # Use a background color that differs from the Lakers primary (#552583 = 85,37,131).
     # We pick bright red (200, 0, 0) as away background via the decision.
     forced_bg: tuple[int, int, int] = (200, 0, 0)
     assets = fixture_decoded_assets()
@@ -407,10 +408,10 @@ def test_thumb_uses_decision_background_rgb() -> None:
 
 
 def test_poster_uses_decision_background_rgb() -> None:
-    """poster generator fills away/home bands from decision.background_rgb (D-02, CTR-01).
+    """poster generator fills away/home bands from decision.background_rgb (D-02).
 
     Supplies a decision whose background_rgb differs from the team's primary_color,
-    verifying the generator reads the decision rather than calling hex_to_rgb(primary).
+    verifying generator reads the decision rather than calling hex_to_rgb(primary).
     """
     from matchup_thumbs.generators.poster import generate_poster_style0
     from tests.conftest import make_decision
@@ -481,9 +482,9 @@ def test_thumb_applies_outline_treatment() -> None:
 
 
 def test_poster_applies_outline_treatment() -> None:
-    """poster generator applies _apply_outline when decision.treatment == OUTLINE (D-04).
+    """poster generator applies _apply_outline when treatment == OUTLINE (D-04).
 
-    Verifies the OUTLINE path produces a different image than NONE for the same logo.
+    Verifies the OUTLINE path produces a different image than NONE for same logo.
     """
     from matchup_thumbs.contrast import Treatment
     from matchup_thumbs.generators.poster import generate_poster_style0
