@@ -43,13 +43,28 @@ class TeamDict(TypedDict):
     logo_variants: dict[str, str] | None
 
 
+class LogoAssets(TypedDict):
+    """Decoded logo images for both matchup teams — loader output only.
+
+    Produced by ``assets/loader.py::load_assets`` (and ``_load_one_logo``).
+    Contains only the RGBA logo images; no contrast decisions.
+
+    The render layer (``render.py``) converts this to a ``DecodedAssets``
+    after computing per-team contrast decisions (Phase 10 D-01, D-02).
+    Both images are RGBA mode (loader calls ``.convert("RGBA")``).
+    """
+
+    away_logo: Image.Image
+    home_logo: Image.Image
+
+
 class DecodedAssets(TypedDict):
     """Pre-decoded PIL.Image logos and contrast decisions for both matchup teams.
 
-    Produced by the asset loader and contrast orchestration layer
-    (assets/loader.py + render.py) which are the only I/O components in the
-    render pipeline.  Generators receive these already-decoded images and
-    per-team contrast decisions and perform no further I/O (GEN-04).
+    Produced by the render orchestration layer (``render.py``) which is the
+    only place that assembles logos + contrast decisions together (D-01, D-02).
+    Generators receive these already-decoded images and per-team contrast
+    decisions and perform no further I/O (GEN-04).
 
     Both images are RGBA mode (loader calls ``.convert("RGBA")``).
     The contrast decisions (D-02, Phase 10) carry the chosen background colour,

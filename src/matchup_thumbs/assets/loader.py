@@ -42,7 +42,7 @@ import structlog
 from PIL import Image
 from redis.asyncio import Redis
 
-from ..generators.types import DecodedAssets, TeamDict
+from ..generators.types import LogoAssets, TeamDict
 from ..metrics import espn_fetch_failures_total
 from ..settings import Settings
 from . import get_placeholder_logo
@@ -178,12 +178,13 @@ async def load_assets(
     league: str,
     settings: Settings,
     variant: str = "default",  # Phase 10 seam (D-05); Phase 8 callers pass "default"
-) -> DecodedAssets:
+) -> LogoAssets:
     """Load and decode logos for both matchup teams.
 
-    Returned ``DecodedAssets`` contains RGBA ``PIL.Image`` objects ready for
-    consumption by pure generator functions (GEN-04).  All I/O is confined here
-    so generators stay pure.
+    Returns a ``LogoAssets`` dict with ``away_logo`` and ``home_logo`` as RGBA
+    ``PIL.Image`` objects.  The render layer (``render.py``) extends this into
+    a full ``DecodedAssets`` after computing per-team contrast decisions
+    (Phase 10 D-01, D-02).  All I/O is confined here so generators stay pure.
 
     Logo bytes are resolved from Redis using the variant-aware key
     ``logo:{league}:{espn_id}:{variant}`` and, on a miss, fetched through the
@@ -199,11 +200,10 @@ async def load_assets(
         league: League slug used in the Redis key and error logs.
         settings: Application settings (WR-06: passed explicitly for testability).
         variant: Logo variant key to request (D-05).  Defaults to ``"default"``.
-            Phase 10 will pass the contrast-engine-selected variant; in Phase 8
-            all callers use the default.
+            Phase 10 drives this with the contrast-engine-selected variant.
 
     Returns:
-        A ``DecodedAssets`` dict with ``away_logo`` and ``home_logo`` as RGBA
+        A ``LogoAssets`` dict with ``away_logo`` and ``home_logo`` as RGBA
         ``PIL.Image`` instances.  Never returns ``None`` for either field.
     """
     away_logo = await _load_one_logo(
@@ -212,4 +212,4 @@ async def load_assets(
     home_logo = await _load_one_logo(
         home, redis, http_client, league, settings, variant
     )
-    return DecodedAssets(away_logo=away_logo, home_logo=home_logo)
+    return LogoAssets(away_logo=away_logo, home_logo=home_logo)

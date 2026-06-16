@@ -298,7 +298,7 @@ def test_render_version_default_is_2() -> None:
 
 
 def test_is_null_color_str_truth_table() -> None:
-    """_is_null_color_str returns True for absent/malformed strings, False for valid hex.
+    """_is_null_color_str: True for absent/malformed strings, False for valid hex.
 
     Inspects the raw string — NOT the parsed tuple — so a real grey '#3A3A3A'
     is NOT treated as null even though it parses to the same tuple as NULL_PRIMARY.
@@ -307,12 +307,12 @@ def test_is_null_color_str_truth_table() -> None:
     from matchup_thumbs.render import _is_null_color_str
 
     # --- Null cases (True) ---
-    assert _is_null_color_str(None) is True       # missing
-    assert _is_null_color_str("") is True          # empty string
-    assert _is_null_color_str("#ABC") is True      # CSS shorthand (3-digit)
-    assert _is_null_color_str("ABC") is True       # missing hash, 3-char
-    assert _is_null_color_str("#GGGGGG") is True   # non-hex characters
-    assert _is_null_color_str("#12345") is True    # 5 hex digits (too short)
+    assert _is_null_color_str(None) is True  # missing
+    assert _is_null_color_str("") is True  # empty string
+    assert _is_null_color_str("#ABC") is True  # CSS shorthand (3-digit)
+    assert _is_null_color_str("ABC") is True  # missing hash, 3-char
+    assert _is_null_color_str("#GGGGGG") is True  # non-hex characters
+    assert _is_null_color_str("#12345") is True  # 5 hex digits (too short)
     assert _is_null_color_str("#1234567") is True  # 7 hex digits (too long)
 
     # --- Valid hex cases (False) ---
@@ -320,7 +320,7 @@ def test_is_null_color_str_truth_table() -> None:
     assert _is_null_color_str("#9E1B32") is False  # Alabama crimson
     assert _is_null_color_str("#FFFFFF") is False  # white
     assert _is_null_color_str("#000000") is False  # black
-    assert _is_null_color_str("3A3A3A") is False   # valid hex without leading #
+    assert _is_null_color_str("3A3A3A") is False  # valid hex without leading #
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +366,7 @@ async def test_decide_for_team_null_colors_legacy_decision() -> None:
 
 
 async def test_decide_for_team_one_valid_color_calls_engine() -> None:
-    """_decide_for_team calls the contrast engine when at least one color is valid (D-10).
+    """_decide_for_team calls the engine when at least one color is valid (D-10).
 
     If only primary_color is absent but secondary_color is valid (or vice versa),
     the engine must still run — the CTR-05 guard requires BOTH to be null to
@@ -375,14 +375,14 @@ async def test_decide_for_team_one_valid_color_calls_engine() -> None:
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
-    from matchup_thumbs.generators._color import NULL_PRIMARY, NULL_SECONDARY
+    from matchup_thumbs.generators._color import NULL_SECONDARY
     from matchup_thumbs.render import _decide_for_team
     from matchup_thumbs.settings import Settings
 
     team_one_valid: dict[str, object] = {
         **fixture_lakers(),
-        "primary_color": None,        # absent
-        "secondary_color": "#9E1B32", # valid
+        "primary_color": None,  # absent
+        "secondary_color": "#9E1B32",  # valid
     }
     logo = Image.new("RGBA", (100, 100), (158, 27, 50, 255))
     settings = MagicMock(spec=Settings)
@@ -398,12 +398,15 @@ async def test_decide_for_team_one_valid_color_calls_engine() -> None:
     )
 
     with (
-        patch("matchup_thumbs.render.decide_contrast", return_value=fake_decision) as mock_dc,
+        patch(
+            "matchup_thumbs.render.decide_contrast",
+            return_value=fake_decision,
+        ) as mock_dc,
         patch(
             "matchup_thumbs.render.anyio.to_thread.run_sync",
             new_callable=AsyncMock,
             return_value=(158, 27, 50),
-        ) as mock_run,
+        ),
     ):
         decision = await _decide_for_team(team_one_valid, logo, settings)  # type: ignore[arg-type]
 
@@ -526,6 +529,7 @@ async def test_singleflight_degrade() -> None:
     mock_settings.sf_max_wait = 0.005  # very short → degrade immediately
     mock_settings.render_cache_ttl = 60
     mock_settings.logo_cache_ttl = 60  # used by load_assets on re-fetch miss
+    mock_settings.min_contrast_ratio = 3.0  # needed by _decide_for_team (Phase 10)
 
     http_client = MagicMock()
     http_client.get = AsyncMock(side_effect=Exception("network unreachable"))
@@ -747,6 +751,7 @@ async def test_singleflight_degrade_writes_cache() -> None:
     mock_settings.sf_max_wait = 0.005  # very short → degrade immediately
     mock_settings.render_cache_ttl = 60
     mock_settings.logo_cache_ttl = 60
+    mock_settings.min_contrast_ratio = 3.0  # needed by _decide_for_team (Phase 10)
 
     http_client = MagicMock()
     http_client.get = AsyncMock(side_effect=Exception("network unreachable"))

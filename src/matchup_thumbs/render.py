@@ -45,9 +45,17 @@ import structlog
 from PIL import Image
 from redis.asyncio import Redis  # bare Redis — not generic at runtime
 
-from .assets.loader import load_assets
+from .assets.loader import _load_one_logo, load_assets
+from .contrast import (
+    ContrastDecision,
+    SelectionReason,
+    Treatment,
+    decide_contrast,
+    dominant_color,
+)
 from .generators import get_generator
-from .generators.types import TeamDict
+from .generators._color import NULL_PRIMARY, NULL_SECONDARY, hex_to_rgb
+from .generators.types import DecodedAssets, LogoAssets, TeamDict
 from .settings import Settings
 
 logger = structlog.get_logger()
@@ -186,6 +194,91 @@ def _build_render_key(
 # ---------------------------------------------------------------------------
 
 
+def _is_null_color_str(raw: str | None) -> bool:
+    """Return True if raw color string is absent or malformed (D-10, CTR-05).
+
+    Inspects the raw string — not the parsed tuple — so a real grey ``'#3A3A3A'``
+    is NOT treated as null (contrast_ratio of grey vs grey is still meaningful
+    and ``'#3A3A3A'`` != NULL_PRIMARY in the raw-string sense even though both
+    parse to ``(58, 58, 58)``).
+
+    Valid form: optional leading ``#``, exactly 6 hexadecimal digits.
+    """
+    if not raw:
+        return True
+    h = raw.lstrip("#")
+    if len(h) != 6:
+        return True
+    try:
+        int(h, 16)
+        return False
+    except ValueError:
+        return True
+
+
+def _make_legacy_decision() -> ContrastDecision:
+    """Return the legacy grey decision for color-less teams (D-10, CTR-05).
+
+    Used when BOTH primary_color AND secondary_color are absent/malformed.
+    This preserves the pre-contrast-engine output for teams with no usable color
+    data — the render is identical to the old ``hex_to_rgb(None, NULL_PRIMARY)``
+    path.
+
+    ``achieved_ratio=1.0`` is the identity: grey background vs grey logo gives
+    a ratio of 1:1 (no separation) — the value is intentional and documents
+    that no contrast improvement was applied.
+    """
+    return ContrastDecision(
+        background_rgb=NULL_PRIMARY,
+        background_source="primary",
+        achieved_ratio=1.0,  # identity: no contrast improvement applied (legacy path)
+        recommended_variant=None,
+        treatment=Treatment.NONE,
+        reason=SelectionReason.PRIMARY_OK,
+    )
+
+
+async def _decide_for_team(
+    team: TeamDict,
+    default_logo: Image.Image,
+    settings: Settings,
+) -> ContrastDecision:
+    """Compute the contrast decision for one team from its DEFAULT logo (D-01, D-03).
+
+    CTR-05 guard (D-10): if BOTH ``primary_color`` and ``secondary_color`` are
+    absent/malformed (detected via the raw strings — not the parsed tuple), this
+    short-circuits to ``_make_legacy_decision()`` and skips the engine entirely.
+    This preserves exact legacy behaviour for color-less teams.
+
+    Otherwise, parses both colors via ``hex_to_rgb``, dispatches
+    ``dominant_color`` to the thread pool via ``anyio.to_thread.run_sync`` (GEN-04
+    — CPU-bound), and calls ``decide_contrast`` to return the full decision.
+
+    The decision is computed on the DEFAULT logo only; it is NEVER re-run after
+    the variant swap (D-03 — re-running on the variant could undo the very fix).
+
+    # TODO: parallelize away+home dominant_color calls with task group (future opt)
+    """
+    if _is_null_color_str(team["primary_color"]) and _is_null_color_str(
+        team["secondary_color"]
+    ):
+        return _make_legacy_decision()
+
+    primary_rgb = hex_to_rgb(team["primary_color"], NULL_PRIMARY)
+    secondary_rgb = hex_to_rgb(team["secondary_color"], NULL_SECONDARY)
+    # Dispatch CPU-bound dominant_color to a thread pool (GEN-04).
+    repr_rgb: tuple[int, int, int] = await anyio.to_thread.run_sync(
+        dominant_color, default_logo
+    )
+    return decide_contrast(
+        primary_rgb,
+        secondary_rgb,
+        repr_rgb,
+        team["logo_variants"],
+        settings.min_contrast_ratio,
+    )
+
+
 def _encode_png(img: Image.Image) -> bytes:
     """Encode a Pillow image to PNG bytes.
 
@@ -211,16 +304,55 @@ async def _render_and_encode(
     http_client: httpx.AsyncClient,
     settings: Settings,
 ) -> bytes:
-    """Load assets, dispatch the pure generator via threadpool, and return PNG bytes.
+    """Two-pass per-team contrast orchestration → generator dispatch → PNG bytes.
 
     This helper is shared by the lock holder path and the degraded fallback path.
-    It is the only place where ``load_assets`` and the generator are called.
+    It is the single decision site for the contrast engine (D-01).
+
+    Pass 1: load both teams' DEFAULT logos (for dominant-color analysis).
+    Decide: run CTR-05 null-color guard + contrast engine per team (D-10).
+    Pass 2: reload each team's recommended variant individually (D-05, CTR-02).
+    Enrich: assemble ``DecodedAssets`` with logos + decisions (D-02).
+    Dispatch: pure generator via threadpool (GEN-04).
 
     Raises:
         UnknownGeneratorError: if (kind, style) is not registered.  Callers
             should validate before calling — this is a defence in depth guard.
     """
-    assets = await load_assets(away, home, redis, http_client, league, settings)
+    # PASS 1: load both teams' default logos for decision input (D-05).
+    # load_assets returns LogoAssets (logos only — no decisions yet).
+    default_logos: LogoAssets = await load_assets(
+        away, home, redis, http_client, league, settings
+    )
+
+    # DECIDE per team: CTR-05 null-color guard + contrast engine (D-01, D-10).
+    # Computed on DEFAULT logo; never re-run after variant swap (D-03).
+    away_decision = await _decide_for_team(away, default_logos["away_logo"], settings)
+    home_decision = await _decide_for_team(home, default_logos["home_logo"], settings)
+
+    # PASS 2: reload each team's recommended variant individually (D-05, CTR-02).
+    # Away and home may resolve different variants.  The loader's silent fallback
+    # chain (variant → dark → default → legacy → placeholder) handles absent
+    # variants; the generator draws OUTLINE unconditionally when directed (D-04).
+    # Re-uses the EXISTING _load_one_logo timeout/fallback/placeholder discipline —
+    # no new unbounded fetch is introduced (T-10-04).
+    away_variant = away_decision.recommended_variant or "default"
+    home_variant = home_decision.recommended_variant or "default"
+    away_logo_final = await _load_one_logo(
+        away, redis, http_client, league, settings, variant=away_variant
+    )
+    home_logo_final = await _load_one_logo(
+        home, redis, http_client, league, settings, variant=home_variant
+    )
+
+    # Enrich DecodedAssets with both logos and decisions (D-02).
+    assets: DecodedAssets = DecodedAssets(
+        away_logo=away_logo_final,
+        home_logo=home_logo_final,
+        away_decision=away_decision,
+        home_decision=home_decision,
+    )
+
     gen_fn = get_generator(kind, style)
     # Guard — callers validate before reaching here; this assertion surfaces
     # any coding error (e.g. degraded path calling with an unknown kind).
