@@ -26,6 +26,36 @@ from PIL import Image, features
 
 from tests.conftest import fixture_clippers, fixture_decoded_assets, fixture_lakers
 
+# ---------------------------------------------------------------------------
+# Synthetic helpers for contrast tests (D-11 — deterministic, no live ESPN)
+# ---------------------------------------------------------------------------
+
+
+def _make_solid_logo(
+    rgb: tuple[int, int, int], size: tuple[int, int] = (100, 100)
+) -> Image.Image:
+    """Solid opaque RGBA logo with transparent background padding (D-11)."""
+    canvas = Image.new("RGBA", (size[0] + 20, size[1] + 20), (0, 0, 0, 0))
+    inner = Image.new("RGBA", size, rgb + (255,))
+    canvas.paste(inner, (10, 10))
+    return canvas
+
+
+def _make_team(primary: str, secondary: str) -> dict[str, Any]:
+    """Minimal TeamDict for a synthetic test team (D-11)."""
+    return {
+        "id": 99,
+        "league_id": 1,
+        "slug": "test-team",
+        "display_name": "Test",
+        "abbreviation": "TST",
+        "primary_color": primary,
+        "secondary_color": secondary,
+        "logo_url": None,
+        "espn_id": "99",
+        "logo_variants": None,
+    }
+
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 
 # Golden tests require the same FreeType text-rendering environment as the
@@ -199,6 +229,69 @@ def test_malformed_hex_generators_do_not_raise() -> None:
 
     poster_img = generate_poster_style0(malformed_away, malformed_home, assets)
     assert poster_img.size == (800, 1200)
+
+
+# ---------------------------------------------------------------------------
+# CTR-01: Crimson-on-crimson repro — logo must be discernible (D-11)
+# ---------------------------------------------------------------------------
+
+
+def test_crimson_on_crimson_repro_is_discernible() -> None:
+    """CTR-01 repro: crimson logo on crimson background must become discernible.
+
+    Asserts the ContrastDecision swaps background OR applies OUTLINE.
+    Never asserts a specific pixel color (fragile); asserts the decision action.
+    Uses deterministic synthetic fixtures — no live ESPN call (D-11).
+    """
+    from matchup_thumbs.contrast import Treatment, decide_contrast, dominant_color
+    from matchup_thumbs.generators._color import (
+        NULL_PRIMARY,
+        NULL_SECONDARY,
+        hex_to_rgb,
+    )
+
+    crimson_hex = "#9E1B32"  # Alabama crimson
+    navy_hex = "#14213D"  # contrasting secondary
+    logo = _make_solid_logo((158, 27, 50))  # crimson logo pixels
+
+    primary_rgb = hex_to_rgb(crimson_hex, NULL_PRIMARY)
+    secondary_rgb = hex_to_rgb(navy_hex, NULL_SECONDARY)
+    repr_rgb = dominant_color(logo)
+    decision = decide_contrast(primary_rgb, secondary_rgb, repr_rgb, None)
+
+    # Background must differ from primary OR OUTLINE must be applied
+    if decision.background_rgb == primary_rgb:
+        assert decision.treatment == Treatment.OUTLINE, (
+            "Crimson logo on crimson background must trigger OUTLINE when"
+            " background stays crimson"
+        )
+    # else: background swapped to secondary — discernibility via color swap; test passes
+
+
+# ---------------------------------------------------------------------------
+# TEST-01: Synthetic worst-case — logo color equals background (D-11)
+# ---------------------------------------------------------------------------
+
+
+def test_logo_color_equals_background_treatment_required() -> None:
+    """Synthetic worst case: logo dominant color == both team colors → OUTLINE required.
+
+    When both primary and secondary have 1.0 contrast ratio against the logo
+    representative color (identical colors), the engine must emit OUTLINE.
+    TEST-01, D-11.
+    """
+    from matchup_thumbs.contrast import SelectionReason, Treatment, decide_contrast
+
+    crimson: tuple[int, int, int] = (158, 27, 50)
+    decision = decide_contrast(
+        primary_rgb=crimson,
+        secondary_rgb=crimson,
+        repr_rgb=crimson,
+        logo_variants=None,
+    )
+    assert decision.treatment == Treatment.OUTLINE
+    assert decision.reason == SelectionReason.TREATMENT_REQUIRED
+    assert decision.achieved_ratio == pytest.approx(1.0, abs=1e-4)
 
 
 # ---------------------------------------------------------------------------
