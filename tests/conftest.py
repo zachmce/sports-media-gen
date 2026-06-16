@@ -231,8 +231,8 @@ def fixture_decoded_assets() -> DecodedAssets:
     return DecodedAssets(
         away_logo=away_logo,
         home_logo=home_logo,
-        away_decision=make_decision(background_rgb=(85, 37, 131)),   # Lakers purple
-        home_decision=make_decision(background_rgb=(200, 16, 46)),   # Clippers red
+        away_decision=make_decision(background_rgb=(85, 37, 131)),  # Lakers purple
+        home_decision=make_decision(background_rgb=(200, 16, 46)),  # Clippers red
     )
 
 

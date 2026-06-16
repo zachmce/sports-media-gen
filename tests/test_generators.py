@@ -56,6 +56,7 @@ def _make_team(primary: str, secondary: str) -> dict[str, Any]:
         "logo_variants": None,
     }
 
+
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 
 # Golden tests require the same FreeType text-rendering environment as the
@@ -247,7 +248,9 @@ def test_apply_outline_preserves_size() -> None:
     """_apply_outline returns an image with the same dimensions as the input (D-07)."""
     from matchup_thumbs.generators._outline import _apply_outline
 
-    logo = _make_solid_logo((100, 100, 200))  # opaque blue mark with transparent padding
+    logo = _make_solid_logo(
+        (100, 100, 200)
+    )  # opaque blue mark with transparent padding
     result = _apply_outline(logo, background_rgb=(100, 100, 200))
     assert result.size == logo.size
 
@@ -460,10 +463,13 @@ def test_thumb_applies_outline_treatment() -> None:
     assets_no_outline = fixture_decoded_assets()
     assets_no_outline["away_logo"] = small_logo
     assets_no_outline["away_decision"] = make_decision(
-        background_rgb=bg_white, treatment=None  # Treatment.NONE
+        background_rgb=bg_white,
+        treatment=None,  # Treatment.NONE
     )
 
-    img_with = generate_thumb_style0(fixture_lakers(), fixture_clippers(), assets_with_outline)
+    img_with = generate_thumb_style0(
+        fixture_lakers(), fixture_clippers(), assets_with_outline
+    )
     img_without = generate_thumb_style0(
         fixture_lakers(), fixture_clippers(), assets_no_outline
     )
@@ -498,10 +504,13 @@ def test_poster_applies_outline_treatment() -> None:
     assets_no_outline = fixture_decoded_assets()
     assets_no_outline["away_logo"] = small_logo
     assets_no_outline["away_decision"] = make_decision(
-        background_rgb=bg_white, treatment=None  # Treatment.NONE
+        background_rgb=bg_white,
+        treatment=None,  # Treatment.NONE
     )
 
-    img_with = generate_poster_style0(fixture_lakers(), fixture_clippers(), assets_with_outline)
+    img_with = generate_poster_style0(
+        fixture_lakers(), fixture_clippers(), assets_with_outline
+    )
     img_without = generate_poster_style0(
         fixture_lakers(), fixture_clippers(), assets_no_outline
     )
