@@ -4,16 +4,21 @@ Covers:
 - fetch_teams / select_logo_url unit tests (Task 1)
 - generate_aliases, seed upsert idempotency, logo fallback, graceful
   degradation tests (Task 2)
+- fetch_league_logo_data core-API fetch tests (11-02 Task 1)
+- league logo seed loop + NCAA placeholder fallback tests (11-02 Task 2)
 """
 
 from __future__ import annotations
 
+import io
 import json
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import psycopg
 import pytest
+from PIL import Image as _Image
 from pytest_httpx import HTTPXMock
 
 from matchup_thumbs.assets import get_placeholder_logo
@@ -21,6 +26,7 @@ from matchup_thumbs.espn.client import (
     LEAGUE_ENDPOINTS,
     build_logo_variants,
     derive_variant_key,
+    fetch_league_logo_data,
     fetch_logo_bytes,
     fetch_teams,
     select_logo_url,
@@ -625,8 +631,331 @@ async def test_seed_degrade_no_truncate(
 
 
 # ---------------------------------------------------------------------------
+# 11-02 Task 1: fetch_league_logo_data — ESPN core API league-logo fetch (LGL-01)
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_league_logo_data_distinct_hrefs_returns_two_logos() -> None:
+    """Mocked core-API response with two distinct-href logos → 2 ESPNLogo (LGL-01).
+
+    Verifies:
+    - URL is built from LEAGUE_ENDPOINTS path split on "/" + core_api_base_url
+    - Logos parsed from inline "logos" key (no $ref follow)
+    - Returns list[ESPNLogo] with verbatim hrefs (D-01)
+    """
+    core_api_base_url = "https://sports.core.api.espn.com"
+    league_slug = "nba"
+    path, _ = LEAGUE_ENDPOINTS[league_slug]
+    sport, espn_league_slug = path.split("/", 1)
+    expected_url = f"{core_api_base_url}/v2/sports/{sport}/leagues/{espn_league_slug}"
+
+    nba_logos_payload = {
+        "logos": [
+            {
+                "href": "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png",
+                "rel": ["full", "default"],
+                "width": 500,
+                "height": 500,
+            },
+            {
+                "href": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500-dark/nba.png",
+                "rel": ["full", "dark"],
+                "width": 500,
+                "height": 500,
+            },
+        ]
+    }
+
+    transport = httpx.MockTransport(
+        handler=_make_core_api_mock_handler(expected_url, nba_logos_payload)
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        logos = await fetch_league_logo_data(client, core_api_base_url, league_slug)
+
+    assert len(logos) == 2, f"Expected 2 ESPNLogo entries, got {len(logos)}"
+    assert isinstance(logos[0], ESPNLogo)
+    assert logos[0].href == "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png"
+    assert logos[1].href == (
+        "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500-dark/nba.png"
+    )
+
+
+async def test_fetch_league_logo_data_http_error_returns_empty_list() -> None:
+    """HTTP error (404) → returns empty list without raising (LGL-01, T-11-01).
+
+    A failing league logo fetch must not abort the entire seed run.
+    """
+    core_api_base_url = "https://sports.core.api.espn.com"
+    league_slug = "nfl"
+
+    def error_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler=error_handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        logos = await fetch_league_logo_data(client, core_api_base_url, league_slug)
+
+    assert logos == [], f"Expected empty list on HTTP error, got {logos!r}"
+
+
+# ---------------------------------------------------------------------------
+# 11-02 Task 2: league logo seed loop + NCAA placeholder fallback (LGL-03)
+# ---------------------------------------------------------------------------
+
+
+async def test_has_usable_league_logo_distinct_hrefs_returns_true() -> None:
+    """_has_usable_league_logo: distinct hrefs → True (pro league)."""
+    from matchup_thumbs.seed import _has_usable_league_logo
+
+    variant_map = {
+        "default": "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png",
+        "dark": "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500-dark/nba.png",
+    }
+    assert _has_usable_league_logo(variant_map) is True
+
+
+async def test_has_usable_league_logo_identical_hrefs_returns_false() -> None:
+    """_has_usable_league_logo: identical hrefs → False (NCAA case, D-06)."""
+    from matchup_thumbs.seed import _has_usable_league_logo
+
+    identical_href = "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
+    variant_map = {"default": identical_href, "dark": identical_href}
+    assert _has_usable_league_logo(variant_map) is False
+
+
+async def test_has_usable_league_logo_empty_map_returns_false() -> None:
+    """_has_usable_league_logo: empty map → False."""
+    from matchup_thumbs.seed import _has_usable_league_logo
+
+    assert _has_usable_league_logo({}) is False
+
+
+async def test_seed_league_logo_pro_league_warms_both_keys(
+    mock_redis: MagicMock,
+) -> None:
+    """Pro league (distinct hrefs) → seed warms leaguelogo:{slug}:default and :dark.
+
+    Uses a fully mocked environment (httpx + redis + pool) so no live services
+    are needed.  Asserts:
+    - redis.set called for both :default and :dark keys
+    - UPDATE executed with parameterized slug/logo_url/logo_variants args
+    """
+    from matchup_thumbs.seed import run as seed_run
+
+    core_api_base_url = "https://sports.core.api.espn.com"
+    league_slug = "nba"
+    path, limit = LEAGUE_ENDPOINTS[league_slug]
+    sport, espn_league_slug = path.split("/", 1)
+    core_url = f"{core_api_base_url}/v2/sports/{sport}/leagues/{espn_league_slug}"
+    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+
+    default_href = "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png"
+    dark_href = "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500-dark/nba.png"
+
+    # Mock httpx — responds to core API and site API; returns PNG bytes for logo fetches
+    def _make_tiny_png() -> bytes:
+        buf = io.BytesIO()
+        _Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    tiny_png = _make_tiny_png()
+
+    # Build a minimal ESPN teams fixture with one active team
+    espn_teams_fixture: dict[str, Any] = {
+        "sports": [
+            {
+                "leagues": [
+                    {
+                        "teams": [
+                            {
+                                "team": {
+                                    "id": "13",
+                                    "slug": "los-angeles-lakers",
+                                    "abbreviation": "LAL",
+                                    "displayName": "Los Angeles Lakers",
+                                    "shortDisplayName": "Lakers",
+                                    "name": "Lakers",
+                                    "location": "Los Angeles",
+                                    "isActive": True,
+                                    "logos": [],
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+    def mock_http_handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == core_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(
+                    {
+                        "logos": [
+                            {"href": default_href, "rel": ["full", "default"]},
+                            {"href": dark_href, "rel": ["full", "dark"]},
+                        ]
+                    }
+                ).encode(),
+                headers={"content-type": "application/json"},
+            )
+        if url == site_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(espn_teams_fixture).encode(),
+                headers={"content-type": "application/json"},
+            )
+        # Logo byte fetches from CDN
+        return httpx.Response(200, content=tiny_png)
+
+    # Mock pool — simulate league_id lookup returning 1
+    pool = MagicMock()
+    conn = AsyncMock()
+    cursor = AsyncMock()
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock(return_value=None)
+    cursor.fetchone = AsyncMock(return_value=(1,))
+    cursor.rowcount = 0
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    conn.cursor.return_value = cursor
+    pool.connection.return_value = conn
+
+    transport = httpx.MockTransport(handler=mock_http_handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        await seed_run(pool, mock_redis, http_client, [league_slug])
+
+    # Verify redis.set was called for both league logo keys
+    set_calls = mock_redis.set.call_args_list
+    set_keys = [c.args[0] if c.args else c.kwargs.get("name", b"") for c in set_calls]
+    league_logo_keys = [k for k in set_keys if k.startswith(b"leaguelogo:")]
+    assert b"leaguelogo:nba:default" in league_logo_keys, (
+        f"Expected leaguelogo:nba:default in set calls, got {league_logo_keys}"
+    )
+    assert b"leaguelogo:nba:dark" in league_logo_keys, (
+        f"Expected leaguelogo:nba:dark in set calls, got {league_logo_keys}"
+    )
+
+
+async def test_seed_league_logo_ncaa_warms_placeholder_default_only(
+    mock_redis: MagicMock,
+) -> None:
+    """NCAA (identical hrefs) → seed warms :default with placeholder; does not raise.
+
+    Verifies:
+    - No leaguelogo:ncaaf:dark key written
+    - leaguelogo:ncaaf:default warmed with placeholder bytes (D-06)
+    - No exception raised
+    """
+    from matchup_thumbs.seed import run as seed_run
+
+    core_api_base_url = "https://sports.core.api.espn.com"
+    league_slug = "ncaaf"
+    path, limit = LEAGUE_ENDPOINTS[league_slug]
+    sport, espn_league_slug = path.split("/", 1)
+    core_url = f"{core_api_base_url}/v2/sports/{sport}/leagues/{espn_league_slug}"
+    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+
+    identical_href = "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
+
+    espn_teams_fixture: dict[str, Any] = {
+        "sports": [
+            {
+                "leagues": [
+                    {
+                        "teams": []  # no teams — just testing league logo path
+                    }
+                ]
+            }
+        ]
+    }
+
+    def mock_http_handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == core_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(
+                    {
+                        "logos": [
+                            {"href": identical_href, "rel": ["full", "default"]},
+                            {"href": identical_href, "rel": ["full", "dark"]},
+                        ]
+                    }
+                ).encode(),
+                headers={"content-type": "application/json"},
+            )
+        if url == site_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(espn_teams_fixture).encode(),
+                headers={"content-type": "application/json"},
+            )
+        return httpx.Response(404)
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    cursor = AsyncMock()
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock(return_value=None)
+    cursor.fetchone = AsyncMock(return_value=(1,))
+    cursor.rowcount = 0
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    conn.cursor.return_value = cursor
+    pool.connection.return_value = conn
+
+    transport = httpx.MockTransport(handler=mock_http_handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        await seed_run(pool, mock_redis, http_client, [league_slug])
+
+    set_calls = mock_redis.set.call_args_list
+    set_keys = [c.args[0] if c.args else c.kwargs.get("name", b"") for c in set_calls]
+    league_logo_keys = [k for k in set_keys if k.startswith(b"leaguelogo:")]
+
+    assert b"leaguelogo:ncaaf:default" in league_logo_keys, (
+        "Expected leaguelogo:ncaaf:default warmed with placeholder, "
+        f"got {league_logo_keys}"
+    )
+    assert b"leaguelogo:ncaaf:dark" not in league_logo_keys, (
+        "leaguelogo:ncaaf:dark must not be warmed (only :default for NCAA)"
+    )
+    # The default key must be warmed with placeholder bytes
+    for c in set_calls:
+        k = c.args[0] if c.args else b""
+        if k == b"leaguelogo:ncaaf:default":
+            warmed_bytes = c.args[1] if len(c.args) > 1 else b""
+            placeholder = get_placeholder_logo()
+            assert warmed_bytes == placeholder, (
+                "NCAA :default must be warmed with get_placeholder_logo() bytes"
+            )
+            break
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _make_core_api_mock_handler(
+    expected_url: str,
+    fixture: dict[str, Any],
+) -> Any:
+    """Return an httpx mock transport handler for the ESPN core API."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == expected_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(fixture).encode(),
+                headers={"content-type": "application/json"},
+            )
+        return httpx.Response(404)
+
+    return handler
 
 
 def _make_espn_mock_handler(
