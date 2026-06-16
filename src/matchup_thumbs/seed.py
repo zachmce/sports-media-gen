@@ -44,6 +44,7 @@ from .assets import get_placeholder_logo
 from .espn.client import (
     LEAGUE_ENDPOINTS,
     build_logo_variants,
+    fetch_league_logo_data,
     fetch_logo_bytes,
     fetch_teams,
     select_logo_url,
@@ -58,6 +59,31 @@ logger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 KNOWN_LEAGUES: frozenset[str] = frozenset(LEAGUE_ENDPOINTS.keys())
+
+# ---------------------------------------------------------------------------
+# Redis key prefix for league logos (D-04 / LGL-03)
+# Namespace: leaguelogo:{league}:{variant}  (one word, no underscore)
+# DISTINCT from the team logo namespace: logo:{league}:{espn_id}:{variant}
+# ---------------------------------------------------------------------------
+
+_LEAGUE_LOGO_KEY_PREFIX: str = "leaguelogo"
+
+
+# ---------------------------------------------------------------------------
+# League logo helpers (LGL-03 / D-06)
+# ---------------------------------------------------------------------------
+
+
+def _has_usable_league_logo(variant_map: dict[str, str]) -> bool:
+    """Return True if the variant map contains a real league logo.
+
+    ESPN NCAA leagues return a ``logos`` array where both ``default`` and
+    ``dark`` point to the same generic sport-icon URL.  A league logo is
+    "usable" only when at least two distinct hrefs exist — structural
+    same-href detection per D-06 and RESEARCH Pitfall 1.  No allowlist
+    needed: if ESPN ever adds distinct NCAA icons the check flips correctly.
+    """
+    return len(set(variant_map.values())) > 1
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +180,65 @@ async def run(
 
     for league_slug in leagues:
         await logger.ainfo("seed_league_start", league=league_slug)
+
+        # --- League logo: fetch from ESPN core API, persist to Postgres,
+        #     pre-warm Redis (LGL-01, LGL-03, D-04, D-05, D-06, T-11-01/T-11-03) ---
+        # slug is already validated against KNOWN_LEAGUES above (T-02-03 / T-11-01)
+        logos = await fetch_league_logo_data(
+            http_client, settings.espn_core_api_base_url, league_slug
+        )
+        logo_url = select_logo_url(logos)
+        variant_map = build_logo_variants(logos, league_slug, league_slug)
+
+        # Persist logo_url + logo_variants to Postgres (D-05 idempotent UPDATE).
+        # Leagues rows pre-exist from migration 0001; use UPDATE not INSERT (A5).
+        # Parameterized SQL only — never f-string the slug (T-11-03).
+        async with pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE leagues
+                SET logo_url = %(logo_url)s,
+                    logo_variants = %(logo_variants)s
+                WHERE slug = %(slug)s
+                """,
+                {
+                    "slug": league_slug,
+                    "logo_url": logo_url,
+                    "logo_variants": Jsonb(variant_map),
+                },
+            )
+
+        # Pre-warm Redis under leaguelogo:{slug}:{variant} (D-04, D-06).
+        # For pro leagues (distinct hrefs): warm both default and dark.
+        # For NCAA (identical hrefs → not usable): warm :default with placeholder only.
+        if _has_usable_league_logo(variant_map):
+            for variant in set(variant_map.keys()) & {"default", "dark"}:
+                href = variant_map[variant]
+                try:
+                    logo_bytes = await fetch_logo_bytes(
+                        http_client, href, semaphore, settings.espn_jitter_max
+                    )
+                except Exception as exc:
+                    await logger.aerror(
+                        "league_logo_bytes_fetch_failed",
+                        league=league_slug,
+                        variant=variant,
+                        url=href,
+                        error=str(exc),
+                    )
+                    logo_bytes = get_placeholder_logo()
+                cache_key = (
+                    f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:{variant}".encode()
+                )
+                await redis.set(cache_key, logo_bytes, ex=settings.logo_cache_ttl)
+        else:
+            # NCAA or any league with no usable logo → placeholder under :default (D-06)
+            cache_key = (
+                f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:default".encode()
+            )
+            await redis.set(
+                cache_key, get_placeholder_logo(), ex=settings.logo_cache_ttl
+            )
 
         # --- Fetch team JSON (ESPN failure propagates → no truncate) ---
         espn_response = await fetch_teams(
@@ -363,7 +448,7 @@ def main() -> None:
     """
     try:
         asyncio.run(_amain())
-    except SystemExit, KeyboardInterrupt:
+    except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as exc:
         # Log the failure and exit non-zero (ESPN-05 / D-15)

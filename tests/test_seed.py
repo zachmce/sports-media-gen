@@ -811,9 +811,11 @@ async def test_seed_league_logo_pro_league_warms_both_keys(
         # Logo byte fetches from CDN
         return httpx.Response(200, content=tiny_png)
 
-    # Mock pool — simulate league_id lookup returning 1
+    # Mock pool — simulate league_id lookup returning 1 and alias rowcount 0.
+    # cursor must support async context manager protocol (used as conn.cursor() in
+    # `async with pool.connection() as conn, conn.cursor() as cur:`).
     pool = MagicMock()
-    conn = AsyncMock()
+    conn = MagicMock()
     cursor = AsyncMock()
     cursor.__aenter__ = AsyncMock(return_value=cursor)
     cursor.__aexit__ = AsyncMock(return_value=None)
@@ -821,8 +823,10 @@ async def test_seed_league_logo_pro_league_warms_both_keys(
     cursor.rowcount = 0
     conn.__aenter__ = AsyncMock(return_value=conn)
     conn.__aexit__ = AsyncMock(return_value=None)
-    conn.cursor.return_value = cursor
-    pool.connection.return_value = conn
+    # Use MagicMock (not AsyncMock) for cursor() so the call returns the cursor
+    # synchronously (psycopg pattern: async with conn.cursor() — cursor() is sync)
+    conn.cursor = MagicMock(return_value=cursor)
+    pool.connection = MagicMock(return_value=conn)
 
     transport = httpx.MockTransport(handler=mock_http_handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
@@ -897,7 +901,7 @@ async def test_seed_league_logo_ncaa_warms_placeholder_default_only(
         return httpx.Response(404)
 
     pool = MagicMock()
-    conn = AsyncMock()
+    conn = MagicMock()
     cursor = AsyncMock()
     cursor.__aenter__ = AsyncMock(return_value=cursor)
     cursor.__aexit__ = AsyncMock(return_value=None)
@@ -905,8 +909,8 @@ async def test_seed_league_logo_ncaa_warms_placeholder_default_only(
     cursor.rowcount = 0
     conn.__aenter__ = AsyncMock(return_value=conn)
     conn.__aexit__ = AsyncMock(return_value=None)
-    conn.cursor.return_value = cursor
-    pool.connection.return_value = conn
+    conn.cursor = MagicMock(return_value=cursor)
+    pool.connection = MagicMock(return_value=conn)
 
     transport = httpx.MockTransport(handler=mock_http_handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
