@@ -23,7 +23,6 @@ import pytest
 from PIL import Image
 
 from matchup_thumbs.contrast import (
-    ContrastDecision,
     SelectionReason,
     Treatment,
     contrast_ratio,
@@ -193,7 +192,8 @@ def test_decide_swapped_to_secondary() -> None:
     )
     secondary_ratio = contrast_ratio(_WHITE, _LAKERS_PURPLE)
     assert result.achieved_ratio == pytest.approx(secondary_ratio, abs=1e-4), (
-        f"Expected achieved_ratio≈{secondary_ratio:.4f}, got {result.achieved_ratio:.4f}"
+        f"Expected achieved_ratio≈{secondary_ratio:.4f}, "
+        f"got {result.achieved_ratio:.4f}"
     )
 
 
@@ -222,45 +222,48 @@ def test_treatment_required_when_both_low() -> None:
     assert result.reason == SelectionReason.TREATMENT_REQUIRED, (
         f"Expected SelectionReason.TREATMENT_REQUIRED, got {result.reason!r}"
     )
-    # background should be the higher-contrast of the two colors
-    primary_ratio = contrast_ratio(_CLIPPERS_RED, _CLIPPERS_RED)  # 1.0
-    secondary_ratio = contrast_ratio(_CLIPPERS_RED, _CLIPPERS_BLUE)  # ~1.624
-    expected_bg = _CLIPPERS_BLUE  # higher ratio
+    # background should be the higher-contrast (blue>red when repr=red)
+    expected_bg = _CLIPPERS_BLUE  # 1.624:1 > 1.0:1 (same-color)
     assert result.background_rgb == expected_bg, (
-        f"Expected higher-contrast background {expected_bg!r}, got {result.background_rgb!r}"
+        f"Expected higher-contrast background {expected_bg!r}, "
+        f"got {result.background_rgb!r}"
     )
 
 
 def test_never_none_below_threshold() -> None:
     """CTR-04 guard: treatment must never be NONE when both ratios are below threshold.
 
-    Uses a white logo on two nearly-identical dark colors — both ratios well below 3.0.
+    Clippers red vs blue → 1.624:1 (both saturated, mid-range).
+    Use repr_rgb == Clippers red so primary ratio = 1.0 and
+    secondary ratio ≈ 1.624 — both below the 3.0 threshold.
     Treatment.NONE below threshold is the silent-pass bug CTR-04 fixes.
     """
-    very_dark_red: tuple[int, int, int] = (30, 5, 5)
-    very_dark_blue: tuple[int, int, int] = (5, 5, 30)
-    white_logo: tuple[int, int, int] = (255, 255, 255)
+    # Verified reference pair from RESEARCH.md: Clippers red vs blue → 1.624:1
+    # repr_rgb == primary → primary ratio = 1.0; secondary ratio ≈ 1.624:1
+    repr_rgb = _CLIPPERS_RED
 
     # Verify the test precondition: both ratios truly below 3.0
-    r_primary = contrast_ratio(white_logo, very_dark_red)
-    r_secondary = contrast_ratio(white_logo, very_dark_blue)
+    r_primary = contrast_ratio(repr_rgb, _CLIPPERS_RED)
+    r_secondary = contrast_ratio(repr_rgb, _CLIPPERS_BLUE)
     assert max(r_primary, r_secondary) < 3.0, (
         f"Test precondition failed: expected both ratios < 3.0, "
         f"got primary={r_primary:.3f}, secondary={r_secondary:.3f}"
     )
 
     result = decide_contrast(
-        primary_rgb=very_dark_red,
-        secondary_rgb=very_dark_blue,
-        repr_rgb=white_logo,
+        primary_rgb=_CLIPPERS_RED,
+        secondary_rgb=_CLIPPERS_BLUE,
+        repr_rgb=repr_rgb,
         logo_variants=None,
     )
+    max_ratio = max(r_primary, r_secondary)
     assert result.treatment != Treatment.NONE, (
-        f"CTR-04 violated: got Treatment.NONE when max ratio {max(r_primary, r_secondary):.3f} "
+        f"CTR-04 violated: got Treatment.NONE when max ratio {max_ratio:.3f} "
         f"is below threshold — engine must never silently pass low contrast"
     )
     assert result.treatment == Treatment.OUTLINE, (
-        f"Expected Treatment.OUTLINE as last-resort fallback (D-10), got {result.treatment!r}"
+        f"Expected Treatment.OUTLINE as last-resort (D-10), "
+        f"got {result.treatment!r}"
     )
 
 
@@ -289,7 +292,8 @@ def test_contrast_decision_has_achieved_ratio_field() -> None:
         "ContrastDecision must have field 'achieved_ratio'"
     )
     assert not hasattr(decision, "contrast_ratio"), (
-        "ContrastDecision must NOT have field 'contrast_ratio' — name collision with function"
+        "ContrastDecision must NOT have field 'contrast_ratio' "
+        "— name collision with function"
     )
     assert isinstance(decision.achieved_ratio, float), (
         f"achieved_ratio must be float, got {type(decision.achieved_ratio)!r}"
@@ -302,7 +306,7 @@ def test_contrast_decision_has_achieved_ratio_field() -> None:
 
 
 def test_decide_recommends_variant() -> None:
-    """When primary bg chosen AND 'primary_logo_on_primary_color' in logo_variants → recommend it."""
+    """primary bg + 'primary_logo_on_primary_color' in logo_variants → recommend it."""
     logo_variants = {
         "default": "https://example.com/default.png",
         "primary_logo_on_primary_color": "https://example.com/on_primary.png",

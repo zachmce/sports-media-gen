@@ -2,13 +2,15 @@
 
 Pure functions — no I/O, no randomness.  Decides which team background color
 and logo variant achieve sufficient visual contrast for a given logo color.
-Implements CTR-03 (WCAG luminance / contrast-ratio math) and TEST-02
-(alpha-aware dominant-color extraction).  The decision entry point
-``decide_contrast`` is added in plan 09-02.
+Implements CTR-03 (WCAG luminance / contrast-ratio math), CTR-04 (treatment
+fallback when no color swap suffices), and TEST-02 (alpha-aware dominant-color
+extraction).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum, auto
 from typing import cast
 
 from PIL import Image
@@ -173,5 +175,202 @@ def dominant_color(rgba_image: Image.Image) -> tuple[int, int, int]:
 
     # Integer floor division: channels must be 8-bit ints (RESEARCH Pitfall 3).
     return (r_acc // weight, g_acc // weight, b_acc // weight)
+
+
+# ---------------------------------------------------------------------------
+# Decision types: Treatment directive, SelectionReason, ContrastDecision (D-08, D-09)
+# ---------------------------------------------------------------------------
+
+
+class Treatment(Enum):
+    """Treatment directive for logo rendering when color swap alone is insufficient.
+
+    D-09: The engine decides the treatment kind; Phase 10 renders it.
+    OUTLINE is the last-resort default (D-10); NONE means no extra treatment needed.
+    """
+
+    NONE = auto()
+    OUTLINE = auto()
+    HALO = auto()
+    PLATE = auto()
+
+
+class SelectionReason(Enum):
+    """Machine-readable reason for the background selection decision.
+
+    String values produce human-readable log output (D-08).
+    """
+
+    PRIMARY_OK = "primary_ok"
+    SWAPPED_TO_SECONDARY = "swapped_to_secondary"
+    TREATMENT_REQUIRED = "treatment_required"
+
+
+@dataclass(frozen=True)
+class ContrastDecision:
+    """Immutable record of a contrast decision (D-08).
+
+    Frozen so it is hashable and snapshot-testable.  Named fields document
+    the decision for the Phase 10 consumer.
+
+    Fields:
+        background_rgb:      Chosen background colour as an (R, G, B) 3-tuple.
+        background_source:   Which colour was chosen: ``"primary"`` or ``"secondary"``.
+        achieved_ratio:      WCAG contrast ratio of the CHOSEN background against the
+                             logo's representative colour.  Named ``achieved_ratio``
+                             (NOT ``contrast_ratio``) to avoid a NameError caused by
+                             shadowing the ``contrast_ratio()`` function (RESEARCH
+                             Pitfall 5).
+        recommended_variant: Variant key from ``logo_variants`` that suits the chosen
+                             background, or ``None`` when no key maps (D-11).
+        treatment:           Directive for the Phase 10 renderer (D-09).
+        reason:              Machine-readable reason for the selection (D-08).
+    """
+
+    background_rgb: tuple[int, int, int]
+    background_source: str  # "primary" | "secondary"
+    # Ratio of CHOSEN background — NOT named contrast_ratio (Pitfall 5: collision)
+    achieved_ratio: float
+    recommended_variant: str | None  # variant key from logo_variants, or None (D-11)
+    treatment: Treatment
+    reason: SelectionReason
+
+
+# ---------------------------------------------------------------------------
+# Variant-key recommendation constants (D-11) — no magic strings (AGENTS.md)
+# ---------------------------------------------------------------------------
+
+# D-11: Key recommended when the engine selects the team's primary colour as background.
+_VARIANT_PRIMARY_ON_PRIMARY: str = "primary_logo_on_primary_color"
+
+# D-11: Key recommended when the engine swaps to the secondary colour as background.
+_VARIANT_DARK: str = "dark"
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _recommend_variant(
+    logo_variants: dict[str, str] | None,
+    background_source: str,
+) -> str | None:
+    """Return the best variant key for the chosen background, or None.
+
+    D-11: Performs membership checks against actual dict keys — never assumes a
+    key is present.  Returns None when logo_variants is None, empty, or contains
+    no key that maps to the chosen background.
+
+    Args:
+        logo_variants:    The team's available variant keys (from TeamDict), or None.
+        background_source: ``"primary"`` or ``"secondary"`` — which background
+            was chosen.
+
+    Returns:
+        A variant key string, or None.
+    """
+    if not logo_variants:
+        return None
+    if background_source == "primary" and _VARIANT_PRIMARY_ON_PRIMARY in logo_variants:
+        return _VARIANT_PRIMARY_ON_PRIMARY
+    if background_source == "secondary" and _VARIANT_DARK in logo_variants:
+        return _VARIANT_DARK
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Decision entry point: decide_contrast (CTR-03, CTR-04)
+# ---------------------------------------------------------------------------
+
+
+def decide_contrast(
+    primary_rgb: tuple[int, int, int],
+    secondary_rgb: tuple[int, int, int],
+    repr_rgb: tuple[int, int, int],
+    logo_variants: dict[str, str] | None,
+    threshold: float = MIN_CONTRAST_RATIO,
+) -> ContrastDecision:
+    """Select the best background colour and treatment for a logo against team colours.
+
+    Implements the CTR-03 higher-contrast selection and CTR-04 treatment fallback.
+
+    The function accepts pre-parsed RGB tuples (``tuple[int, int, int]``).  Hex
+    colour parsing is the caller's responsibility via ``hex_to_rgb`` (RESEARCH
+    Pitfall 4, D-02).  The logo's representative colour (``repr_rgb``) should be
+    obtained from ``dominant_color()`` before calling this function (D-03).
+
+    Decision logic (CTR-03, CTR-04):
+    1. If the primary colour achieves contrast >= *threshold* against ``repr_rgb``
+       → use primary background, ``Treatment.NONE``, ``SelectionReason.PRIMARY_OK``.
+    2. Else if the secondary colour achieves contrast >= *threshold*
+       → use secondary background, ``Treatment.NONE``,
+       ``SelectionReason.SWAPPED_TO_SECONDARY``.
+    3. Else (neither clears the threshold, CTR-04)
+       → pick whichever of the two has the higher ratio as background,
+       ``Treatment.OUTLINE`` (D-10 last-resort default),
+       ``SelectionReason.TREATMENT_REQUIRED``.
+       Treatment.NONE is NEVER returned in this branch.
+
+    The ``achieved_ratio`` field on the returned ``ContrastDecision`` records the
+    ratio of the **chosen** background (not the maximum of the two), per RESEARCH
+    Open Question 3.
+
+    Args:
+        primary_rgb:   Team's primary colour as an (R, G, B) 3-tuple.
+        secondary_rgb: Team's secondary colour as an (R, G, B) 3-tuple.
+        repr_rgb:      Logo's representative colour (output of ``dominant_color``).
+        logo_variants: Team's available variant keys (dict[str, str] | None).  The
+                       function performs membership checks — never assumes a key exists.
+        threshold:     Minimum acceptable contrast ratio (default:
+                       ``MIN_CONTRAST_RATIO=3.0``). The Phase 10 caller passes
+                       ``settings.min_contrast_ratio`` here (D-05); the engine
+                       itself never imports ``settings``.
+
+    Returns:
+        A frozen ``ContrastDecision`` documenting the chosen background, achieved
+        ratio, variant recommendation, treatment, and selection reason.
+    """
+    primary_ratio = contrast_ratio(repr_rgb, primary_rgb)
+    secondary_ratio = contrast_ratio(repr_rgb, secondary_rgb)
+
+    if primary_ratio >= threshold:
+        bg = primary_rgb
+        source = "primary"
+        chosen_ratio = primary_ratio
+        treatment = Treatment.NONE
+        reason = SelectionReason.PRIMARY_OK
+    elif secondary_ratio >= threshold:
+        bg = secondary_rgb
+        source = "secondary"
+        chosen_ratio = secondary_ratio
+        treatment = Treatment.NONE
+        reason = SelectionReason.SWAPPED_TO_SECONDARY
+    else:
+        # CTR-04: neither colour clears the threshold.
+        # Pick the higher-contrast of the two as background — at least we minimise
+        # the problem.  NEVER return Treatment.NONE here (that is the silent-pass
+        # bug CTR-04 fixes).  Use OUTLINE as the last-resort default (D-10).
+        if primary_ratio >= secondary_ratio:
+            bg = primary_rgb
+            source = "primary"
+            chosen_ratio = primary_ratio
+        else:
+            bg = secondary_rgb
+            source = "secondary"
+            chosen_ratio = secondary_ratio
+        treatment = Treatment.OUTLINE
+        reason = SelectionReason.TREATMENT_REQUIRED
+
+    variant = _recommend_variant(logo_variants, source)
+
+    return ContrastDecision(
+        background_rgb=bg,
+        background_source=source,
+        achieved_ratio=chosen_ratio,
+        recommended_variant=variant,
+        treatment=treatment,
+        reason=reason,
+    )
 
 
