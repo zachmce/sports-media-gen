@@ -271,21 +271,23 @@ def test_render_key_versioning() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CACHE-07: render_version default must be 2 after Phase 10 bump (D-09)
+# CACHE-07: render_version default must be 3 after the v1.2.1 hotfix bump (D-09)
 # ---------------------------------------------------------------------------
 
 
-def test_render_version_default_is_2() -> None:
-    """Settings.render_version defaults to 2 after the Phase 10 bump (CACHE-07).
+def test_render_version_default_is_3() -> None:
+    """Settings.render_version defaults to 3 after the v1.2.1 hotfix bump (CACHE-07).
 
-    The default must be 2 so that all pre-existing :v1 render cache entries
-    become unreachable on first post-deploy request without a Redis flush.
+    The v1.2.1 light-secondary invisible-logo fix changed rendered output, so the
+    default bumps 2 → 3: all pre-existing :v2 render cache entries become
+    unreachable on first post-deploy request without a Redis flush, forcing a
+    re-render with the fixed contrast/variant logic.
     The nginx proxy_cache is NOT invalidated by this bump (its key is URL-based);
     nginx entries expire on their own 30-day TTL (RESEARCH Pitfall 4).
     """
     from matchup_thumbs.settings import Settings
 
-    assert Settings().render_version == 2
+    assert Settings().render_version == 3
 
 
 # ---------------------------------------------------------------------------
