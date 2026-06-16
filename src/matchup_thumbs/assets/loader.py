@@ -54,6 +54,11 @@ logger = structlog.get_logger()
 # pixels, so 4096×4096 is a generous but sane upper limit.
 _MAX_LOGO_PIXELS: int = 4096 * 4096
 
+# Redis key namespace for league logos (LGL-04, D-04).
+# Distinct from the team logo namespace ``logo:`` — no underscore, one word.
+# Full key: ``leaguelogo:{slug}:{variant}``
+_LEAGUE_LOGO_KEY_PREFIX: str = "leaguelogo"
+
 
 def _decode_logo_image(raw: bytes, max_pixels: int) -> Image.Image:
     """Decode logo bytes to an RGBA ``PIL.Image`` with a decompression-bomb cap.
@@ -168,6 +173,54 @@ async def _load_one_logo(
         )
 
     return img
+
+
+async def load_league_logo(
+    slug: str,
+    variant: str,
+    redis: Redis,  # bare Redis (redis-py 8.0 is not a generic class at runtime)
+    settings: Settings,
+) -> Image.Image | None:
+    """Fetch and decode a league logo from Redis. Returns None on cold/missing key.
+
+    D-07: Returns None on cache miss (cold key). Does NOT fall back to the
+    placeholder — placeholder handling is the seed's responsibility (D-06).
+    The render layer treats None as a signal to use the VS fallback.
+
+    Does NOT perform a network fetch on miss — only reads from Redis.
+
+    Key: leaguelogo:{slug}:{variant}
+
+    The ``settings`` parameter is included for interface consistency (e.g.
+    future TTL needs); the load path itself does not call ``redis.set``.
+
+    Decompression-bomb protection: reuses the existing ``_MAX_LOGO_PIXELS`` cap
+    via the shared ``_decode_logo_image`` helper (T-11-02).
+
+    Args:
+        slug:     League slug (e.g. ``"nba"``), used in the Redis key.
+        variant:  Logo variant key (e.g. ``"default"`` or ``"dark"``).
+        redis:    Async Redis client (``decode_responses=False``).
+        settings: Application settings (for interface consistency).
+
+    Returns:
+        Decoded RGBA ``PIL.Image`` on a warm key; ``None`` on a cold or
+        corrupted key (degrade-don't-crash — LGL-04, D-07).
+    """
+    key: bytes = f"{_LEAGUE_LOGO_KEY_PREFIX}:{slug}:{variant}".encode()
+    raw: bytes | None = cast(bytes | None, await redis.get(key))
+    if raw is None:
+        return None
+    try:
+        return await anyio.to_thread.run_sync(_decode_logo_image, raw, _MAX_LOGO_PIXELS)
+    except Exception as exc:
+        await logger.aerror(
+            "league_logo_decode_failed",
+            slug=slug,
+            variant=variant,
+            error=str(exc),
+        )
+        return None
 
 
 async def load_assets(
