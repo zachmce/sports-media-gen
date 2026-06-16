@@ -249,6 +249,21 @@ _VARIANT_PRIMARY_ON_PRIMARY: str = "primary_logo_on_primary_color"
 # D-11: Key recommended when the engine swaps to the secondary colour as background.
 _VARIANT_DARK: str = "dark"
 
+# ---------------------------------------------------------------------------
+# Luminance gate for variant recommendation (v1.2.1 hotfix)
+#
+# The ESPN "dark" variant is a WHITE logo — it is designed for DARK backgrounds.
+# If the chosen background is light (high relative luminance), recommending the
+# "dark" (white) variant produces white-on-white: an invisible logo.
+#
+# WCAG relative luminance ranges from 0.0 (black) to 1.0 (white).  A midpoint
+# threshold of 0.5 cleanly separates perceptually dark backgrounds (L < 0.5)
+# from light ones (L >= 0.5).  The "dark" variant is only safe on dark
+# backgrounds; gate it behind this luminance cutoff.
+# ---------------------------------------------------------------------------
+
+_LIGHT_BACKGROUND_LUMINANCE: float = 0.5  # backgrounds at or above this are "light"
+
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -258,6 +273,7 @@ _VARIANT_DARK: str = "dark"
 def _recommend_variant(
     logo_variants: dict[str, str] | None,
     background_source: str,
+    background_rgb: tuple[int, int, int],
 ) -> str | None:
     """Return the best variant key for the chosen background, or None.
 
@@ -265,10 +281,22 @@ def _recommend_variant(
     key is present.  Returns None when logo_variants is None, empty, or contains
     no key that maps to the chosen background.
 
+    Luminance gate (v1.2.1 hotfix): for secondary-swap decisions the ESPN "dark"
+    variant is a WHITE logo (built for dark backgrounds).  This function checks
+    the relative luminance of ``background_rgb`` before recommending "dark".
+    If the chosen background is light (luminance >= ``_LIGHT_BACKGROUND_LUMINANCE``),
+    "dark" is NOT recommended — returning None so the render layer falls back to the
+    dark-coloured default logo, which will contrast a light background correctly.
+    Without this gate, a team with a white secondary colour (e.g. Alabama #ffffff)
+    would receive the white "dark" variant on a white background → invisible logo.
+
     Args:
-        logo_variants:    The team's available variant keys (from TeamDict), or None.
+        logo_variants:     The team's available variant keys (from TeamDict), or None.
         background_source: ``"primary"`` or ``"secondary"`` — which background
             was chosen.
+        background_rgb:    The chosen background colour as an (R, G, B) 3-tuple.
+            Used to gate the "dark" variant on luminance so a white background
+            never receives a white (dark-variant) logo.
 
     Returns:
         A variant key string, or None.
@@ -278,7 +306,14 @@ def _recommend_variant(
     if background_source == "primary" and _VARIANT_PRIMARY_ON_PRIMARY in logo_variants:
         return _VARIANT_PRIMARY_ON_PRIMARY
     if background_source == "secondary" and _VARIANT_DARK in logo_variants:
-        return _VARIANT_DARK
+        # Luminance gate: "dark" (white ESPN logo) is only safe on DARK backgrounds.
+        # A light background (luminance >= threshold) must NOT receive the white
+        # variant — that produces an invisible logo (v1.2.1 white-on-white bug).
+        bg_luminance = relative_luminance(background_rgb)
+        if bg_luminance < _LIGHT_BACKGROUND_LUMINANCE:
+            return _VARIANT_DARK
+        # Background is light — skip the white "dark" variant; render will use
+        # the default (dark-coloured) logo which contrasts a light background.
     return None
 
 
@@ -365,7 +400,7 @@ def decide_contrast(
         treatment = Treatment.OUTLINE
         reason = SelectionReason.TREATMENT_REQUIRED
 
-    variant = _recommend_variant(logo_variants, source)
+    variant = _recommend_variant(logo_variants, source, bg)
 
     return ContrastDecision(
         background_rgb=bg,

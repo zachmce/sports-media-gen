@@ -387,3 +387,52 @@ def test_settings_min_contrast_ratio_default() -> None:
     assert s.min_contrast_ratio == 3.0, (
         f"Expected Settings.min_contrast_ratio=3.0, got {s.min_contrast_ratio!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Hotfix v1.2.1: _recommend_variant must be luminance-aware (prong 1)
+# ---------------------------------------------------------------------------
+
+
+def test_decide_light_secondary_does_not_recommend_dark() -> None:
+    """Secondary swap to a LIGHT background must NOT recommend the white 'dark' variant.
+
+    The ESPN 'dark' variant is a WHITE logo — built for dark backgrounds.
+    When the chosen secondary background is light (e.g. #ffffff), recommending
+    'dark' produces white-on-white (invisible logo).
+
+    Scenario (mirrors the Alabama bug):
+    - primary_rgb: crimson #9E1B32 (fails contrast against the crimson default logo)
+    - secondary_rgb: white #ffffff (clears contrast threshold against crimson logo,
+      so the engine swaps to secondary)
+    - logo_variants: contains "dark" key (the white ESPN variant)
+    - Expected: background_source == "secondary", recommended_variant is None
+      (because the chosen background is light — recommending 'dark' here = white-on-white)
+    """
+    _CRIMSON: tuple[int, int, int] = (158, 27, 50)   # Alabama-ish crimson logo
+    _CRIMSON_PRIMARY: tuple[int, int, int] = (158, 27, 50)  # same color → ratio=1.0 fails
+    _WHITE_SECONDARY: tuple[int, int, int] = (255, 255, 255)  # light secondary
+
+    logo_variants = {
+        "default": "https://example.com/default.png",
+        "dark": "https://example.com/dark.png",
+    }
+
+    result = decide_contrast(
+        primary_rgb=_CRIMSON_PRIMARY,   # same as logo repr → ratio=1.0 → fails 3.0
+        secondary_rgb=_WHITE_SECONDARY,  # white vs crimson → ratio ≈ 5.9:1 → passes
+        repr_rgb=_CRIMSON,
+        logo_variants=logo_variants,
+    )
+
+    assert result.background_source == "secondary", (
+        f"Expected background_source='secondary' (white clears threshold), "
+        f"got {result.background_source!r}"
+    )
+    # The chosen background is white (light) — recommending 'dark' (white logo)
+    # would yield white-on-white.  The fix: return None so render uses the
+    # crimson default logo which contrasts white well.
+    assert result.recommended_variant is None, (
+        f"Expected recommended_variant=None when secondary background is light "
+        f"(white 'dark' variant would be invisible), got {result.recommended_variant!r}"
+    )
