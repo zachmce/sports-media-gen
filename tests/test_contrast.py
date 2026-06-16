@@ -174,7 +174,7 @@ def test_decide_swapped_to_secondary() -> None:
     → gold-white ≈ 1.73:1 (fails 3.0), purple-white ≈ 6.1:1 (passes 3.0) → SWAPPED
     """
     result = decide_contrast(
-        primary_rgb=_LAKERS_GOLD,   # gold vs white ≈ 1.73:1 → fails
+        primary_rgb=_LAKERS_GOLD,  # gold vs white ≈ 1.73:1 → fails
         secondary_rgb=_LAKERS_PURPLE,  # purple vs white ≈ 6.1:1 → passes
         repr_rgb=_WHITE,
         logo_variants=None,
@@ -263,8 +263,7 @@ def test_never_none_below_threshold() -> None:
         f"is below threshold — engine must never silently pass low contrast"
     )
     assert result.treatment == Treatment.OUTLINE, (
-        f"Expected Treatment.OUTLINE as last-resort (D-10), "
-        f"got {result.treatment!r}"
+        f"Expected Treatment.OUTLINE as last-resort (D-10), got {result.treatment!r}"
     )
 
 

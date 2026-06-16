@@ -372,5 +372,3 @@ def decide_contrast(
         treatment=treatment,
         reason=reason,
     )
-
-
