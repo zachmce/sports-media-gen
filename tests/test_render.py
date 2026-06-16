@@ -1252,9 +1252,7 @@ async def test_render_variant_swap_avoids_invisible_logo() -> None:
 
     captured: dict[str, DecodedAssets] = {}
 
-    def spy_generator(
-        away: object, home: object, assets: DecodedAssets
-    ) -> Image.Image:
+    def spy_generator(away: object, home: object, assets: DecodedAssets) -> Image.Image:
         captured["assets"] = assets
         return Image.new("RGB", (1280, 720), (0, 0, 0))
 

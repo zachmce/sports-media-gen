@@ -487,8 +487,6 @@ def test_recommend_variant_skips_dark_on_light_secondary() -> None:
     }
     # Secondary swap onto a light (white) background: 'dark' (white logo) would be
     # invisible → must NOT be recommended.
-    assert (
-        _recommend_variant(logo_variants, "secondary", (255, 255, 255)) is None
-    )
+    assert _recommend_variant(logo_variants, "secondary", (255, 255, 255)) is None
     # Secondary swap onto a DARK background: 'dark' (white logo) contrasts → ok.
     assert _recommend_variant(logo_variants, "secondary", (20, 20, 20)) == "dark"
