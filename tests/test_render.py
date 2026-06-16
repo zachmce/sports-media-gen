@@ -275,17 +275,13 @@ def test_render_key_versioning() -> None:
 # ---------------------------------------------------------------------------
 
 
-# NOTE: Remove this xfail marker in plan 10-03 when the default is bumped 1→2.
-@pytest.mark.xfail(
-    reason="render_version bump (1→2) lands in plan 10-03",
-    strict=True,
-)
 def test_render_version_default_is_2() -> None:
     """Settings.render_version defaults to 2 after the Phase 10 bump (CACHE-07).
 
     The default must be 2 so that all pre-existing :v1 render cache entries
     become unreachable on first post-deploy request without a Redis flush.
-    This test is xfail(strict=True) until plan 10-03 bumps the default.
+    The nginx proxy_cache is NOT invalidated by this bump (its key is URL-based);
+    nginx entries expire on their own 30-day TTL (RESEARCH Pitfall 4).
     """
     from matchup_thumbs.settings import Settings
 

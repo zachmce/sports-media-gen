@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     db_pool_max_size: int = 10
 
     log_level: str = "INFO"
-    render_version: int = 1
+    # Bumping render_version invalidates the Redis render tier (new :v{N} key; old
+    # entries become unreachable and expire by their TTL — no flush needed, CACHE-07).
+    # NOTE: nginx proxy_cache is NOT invalidated by this bump; its key is URL-based
+    # and nginx entries expire on their own 30-day TTL (RESEARCH Pitfall 4).
+    render_version: int = 2  # Phase 10 bump: 1 → 2 (CACHE-07, D-09)
 
     # ESPN integration
     espn_base_url: str = "https://site.api.espn.com"
