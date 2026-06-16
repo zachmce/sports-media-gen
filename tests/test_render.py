@@ -336,7 +336,7 @@ async def test_decide_for_team_null_colors_legacy_decision() -> None:
     """
     from unittest.mock import MagicMock, patch
 
-    from matchup_thumbs.contrast import Treatment
+    from matchup_thumbs.contrast import SelectionReason, Treatment
     from matchup_thumbs.generators._color import NULL_PRIMARY
     from matchup_thumbs.render import _decide_for_team
     from matchup_thumbs.settings import Settings
@@ -359,6 +359,9 @@ async def test_decide_for_team_null_colors_legacy_decision() -> None:
     assert decision.background_rgb == NULL_PRIMARY
     assert decision.treatment == Treatment.NONE
     assert decision.recommended_variant is None
+    # WR-01: legacy path is tagged NULL_COLOR, not PRIMARY_OK (the primary was
+    # absent, not tested-and-passed) — keeps PRIMARY_OK queries unconflated.
+    assert decision.reason == SelectionReason.NULL_COLOR
 
 
 async def test_decide_for_team_one_valid_color_calls_engine() -> None:

@@ -294,9 +294,13 @@ def test_apply_outline_halo_color_dark_background() -> None:
     # _make_solid_logo). Check pixel (9, 9) — one pixel outside the mark; after
     # dilation it should be white (255,255,255).
     halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
-    if halo_pixel[3] > 0:  # only check color if the pixel is actually in the halo
-        r = halo_pixel[0]
-        assert r > 128, f"Expected white halo on dark background, got r={r}"
+    # (9,9) is one pixel outside the mark; dilation MUST make it opaque halo.
+    # Assert unconditionally so a broken/zero-radius dilation fails loudly (WR-04).
+    assert halo_pixel[3] == 255, (
+        f"Expected opaque halo at (9,9), got alpha={halo_pixel[3]}"
+    )
+    r = halo_pixel[0]
+    assert r > 128, f"Expected white halo on dark background, got r={r}"
 
 
 def test_apply_outline_halo_color_light_background() -> None:
@@ -310,9 +314,12 @@ def test_apply_outline_halo_color_light_background() -> None:
 
     # Check adjacent pixel after dilation — should be dark (halo is black)
     halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
-    if halo_pixel[3] > 0:
-        r = halo_pixel[0]
-        assert r < 128, f"Expected black halo on light background, got r={r}"
+    # Unconditional: dilation must make (9,9) opaque halo, else fail loudly (WR-04).
+    assert halo_pixel[3] == 255, (
+        f"Expected opaque halo at (9,9), got alpha={halo_pixel[3]}"
+    )
+    r = halo_pixel[0]
+    assert r < 128, f"Expected black halo on light background, got r={r}"
 
 
 # ---------------------------------------------------------------------------

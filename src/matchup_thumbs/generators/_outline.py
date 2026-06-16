@@ -57,7 +57,9 @@ def _apply_outline(
     # Dilate the alpha channel by _OUTLINE_DILATION_RADIUS pixels.
     # MaxFilter on the L-mode alpha channel only (NOT the full RGBA).
     # Filtering RGB channels would bleed color into the halo — avoid that.
-    alpha = logo_rgba.split()[3]
+    # Self-guard: callers pass RGBA, but convert defensively so a non-RGBA
+    # image (RGB/L) cannot raise IndexError on .split()[3] (WR-03). Idempotent.
+    alpha = logo_rgba.convert("RGBA").split()[3]
     window = _OUTLINE_DILATION_RADIUS * 2 + 1
     dilated_alpha = alpha.filter(ImageFilter.MaxFilter(window))
 

@@ -234,7 +234,9 @@ def _make_legacy_decision() -> ContrastDecision:
         achieved_ratio=1.0,  # identity: no contrast improvement applied (legacy path)
         recommended_variant=None,
         treatment=Treatment.NONE,
-        reason=SelectionReason.PRIMARY_OK,
+        # NULL_COLOR (not PRIMARY_OK): primary was absent, not tested-and-passed —
+        # keeps PRIMARY_OK log/metric queries unconflated with null teams (WR-01).
+        reason=SelectionReason.NULL_COLOR,
     )
 
 
