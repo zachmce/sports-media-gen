@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # seconds; max waiter wait before degraded local render (D-13/D-14)
     sf_max_wait: float = 5.0
 
+    # Contrast engine (Phase 9 — D-04, D-05)
+    min_contrast_ratio: float = 3.0  # WCAG SC 1.4.11 Non-text Contrast (D-04)
+
     # Readiness probe (Phase 4 — D-15, API-06)
     readyz_check_timeout: float = 3.0  # seconds; per-check timeout in /readyz
 

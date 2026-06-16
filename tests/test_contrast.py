@@ -30,6 +30,7 @@ from matchup_thumbs.contrast import (
     dominant_color,
     relative_luminance,
 )
+from matchup_thumbs.settings import Settings
 
 # ---------------------------------------------------------------------------
 # CTR-03: WCAG luminance and contrast ratio anchors
@@ -373,4 +374,17 @@ def test_decide_secondary_recommends_dark_variant() -> None:
     assert result.recommended_variant == "dark", (
         f"Expected recommended_variant='dark' for secondary bg, "
         f"got {result.recommended_variant!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# D-05: settings.min_contrast_ratio default (engine purity check)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_min_contrast_ratio_default() -> None:
+    """settings.min_contrast_ratio defaults to 3.0 (WCAG SC 1.4.11, D-04/D-05)."""
+    s = Settings()
+    assert s.min_contrast_ratio == 3.0, (
+        f"Expected Settings.min_contrast_ratio=3.0, got {s.min_contrast_ratio!r}"
     )
