@@ -15,7 +15,8 @@ from __future__ import annotations
 from PIL import Image, ImageDraw
 
 from ..assets import _load_font
-from ._color import NULL_PRIMARY, hex_to_rgb
+from ..contrast import Treatment
+from ._outline import _apply_outline
 from .registry import register
 from .types import DecodedAssets, TeamDict
 
@@ -25,12 +26,6 @@ from .types import DecodedAssets, TeamDict
 
 _POSTER_W: int = 800
 _POSTER_H: int = 1200
-
-# ---------------------------------------------------------------------------
-# Colour fallbacks — D-15 (imported from shared _color module)
-# ---------------------------------------------------------------------------
-
-_NULL_PRIMARY: tuple[int, int, int] = NULL_PRIMARY
 
 # ---------------------------------------------------------------------------
 # Layout constants (Claude's discretion — see CONTEXT.md "Discretion" note)
@@ -59,8 +54,10 @@ def generate_poster_style0(
     Pure — no I/O (GEN-04).  Runs in a threadpool via anyio.to_thread.run_sync
     so it never blocks the async event loop.
     """
-    away_rgb = hex_to_rgb(away["primary_color"], _NULL_PRIMARY)
-    home_rgb = hex_to_rgb(home["primary_color"], _NULL_PRIMARY)
+    # Background filled from pre-computed ContrastDecision (D-02, CTR-01).
+    # The render layer computed background_rgb upstream; generators stay pure (GEN-04).
+    away_rgb = assets["away_decision"].background_rgb
+    home_rgb = assets["home_decision"].background_rgb
 
     # --- Vertical split background ---
     bg = Image.new("RGB", (_POSTER_W, _POSTER_H), away_rgb)
@@ -70,15 +67,19 @@ def generate_poster_style0(
     # --- Logo placement ---
     # Away logo: centred in upper band  (D-06: away first/top)
     # Home logo: centred in lower band
-    for logo_img, cy in [
-        (assets["away_logo"], _BAND_H // 2),  # away — upper band centre
-        (assets["home_logo"], _BAND_H + _BAND_H // 2),  # home — lower band centre
+    for logo_img, cy, decision in [
+        (assets["away_logo"], _BAND_H // 2, assets["away_decision"]),
+        (assets["home_logo"], _BAND_H + _BAND_H // 2, assets["home_decision"]),
     ]:
         # Defensive .convert("RGBA") handles RGB-mode ESPN logos (T-03-07 / Pitfall 2)
         logo_rgba = logo_img.convert("RGBA").resize(
             (_LOGO_SIZE, _LOGO_SIZE),
             Image.Resampling.LANCZOS,
         )
+        # Apply OUTLINE halo when directed by the contrast decision (D-04, D-07).
+        # Unconditional: drawn regardless of which variant loaded (D-04).
+        if decision.treatment == Treatment.OUTLINE:
+            logo_rgba = _apply_outline(logo_rgba, decision.background_rgb)
         cx = _POSTER_W // 2
         bg.paste(logo_rgba, (cx - _LOGO_SIZE // 2, cy - _LOGO_SIZE // 2), logo_rgba)
 

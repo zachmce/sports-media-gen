@@ -26,6 +26,37 @@ from PIL import Image, features
 
 from tests.conftest import fixture_clippers, fixture_decoded_assets, fixture_lakers
 
+# ---------------------------------------------------------------------------
+# Synthetic helpers for contrast tests (D-11 — deterministic, no live ESPN)
+# ---------------------------------------------------------------------------
+
+
+def _make_solid_logo(
+    rgb: tuple[int, int, int], size: tuple[int, int] = (100, 100)
+) -> Image.Image:
+    """Solid opaque RGBA logo with transparent background padding (D-11)."""
+    canvas = Image.new("RGBA", (size[0] + 20, size[1] + 20), (0, 0, 0, 0))
+    inner = Image.new("RGBA", size, rgb + (255,))
+    canvas.paste(inner, (10, 10))
+    return canvas
+
+
+def _make_team(primary: str, secondary: str) -> dict[str, Any]:
+    """Minimal TeamDict for a synthetic test team (D-11)."""
+    return {
+        "id": 99,
+        "league_id": 1,
+        "slug": "test-team",
+        "display_name": "Test",
+        "abbreviation": "TST",
+        "primary_color": primary,
+        "secondary_color": secondary,
+        "logo_url": None,
+        "espn_id": "99",
+        "logo_variants": None,
+    }
+
+
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 
 # Golden tests require the same FreeType text-rendering environment as the
@@ -124,21 +155,28 @@ def test_registry_lookup() -> None:
 
 
 def test_null_color_fallback() -> None:
-    """Generators render without error when team primary_color is None (D-15).
+    """Generators render without error when team primary_color is None (D-15, CTR-05).
 
-    When primary_color is None the generator must use the named grey fallback
-    constants (_NULL_PRIMARY = #3A3A3A = (58, 58, 58)) rather than raise.
-    The away-team region (upper-left before the diagonal seam) should be grey.
+    After Phase 10 D-02, the generator reads background_rgb from the ContrastDecision
+    rather than calling hex_to_rgb(primary_color).  The CTR-05 null-color guard lives
+    in the render layer (plan 10-03), which emits a legacy decision with
+    background_rgb = NULL_PRIMARY.  This test simulates that by passing a grey
+    decision, confirming the generator paints grey at (0,0).
     """
-    from matchup_thumbs.generators.thumb import _NULL_PRIMARY, generate_thumb_style0
+    from matchup_thumbs.generators._color import NULL_PRIMARY as _NULL_PRIMARY
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+    from tests.conftest import make_decision
 
     no_color_lakers: dict[str, Any] = {**fixture_lakers(), "primary_color": None}
     no_color_clippers: dict[str, Any] = {**fixture_clippers(), "primary_color": None}
 
+    # Simulate the render layer's legacy grey decision for color-less teams (CTR-05).
+    assets = fixture_decoded_assets()
+    assets["away_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+    assets["home_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+
     # Must not raise; result must still be the correct canvas size
-    img = generate_thumb_style0(
-        no_color_lakers, no_color_clippers, fixture_decoded_assets()
-    )
+    img = generate_thumb_style0(no_color_lakers, no_color_clippers, assets)
     assert img.size == (1280, 720)
 
     # The top-left corner (away region, solidly in the away colour triangle
@@ -199,6 +237,295 @@ def test_malformed_hex_generators_do_not_raise() -> None:
 
     poster_img = generate_poster_style0(malformed_away, malformed_home, assets)
     assert poster_img.size == (800, 1200)
+
+
+# ---------------------------------------------------------------------------
+# Task 1: _apply_outline unit tests (D-07, D-08, CTR-04)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_outline_preserves_size() -> None:
+    """_apply_outline returns an image with the same dimensions as the input (D-07)."""
+    from matchup_thumbs.generators._outline import _apply_outline
+
+    logo = _make_solid_logo(
+        (100, 100, 200)
+    )  # opaque blue mark with transparent padding
+    result = _apply_outline(logo, background_rgb=(100, 100, 200))
+    assert result.size == logo.size
+
+
+def test_apply_outline_halo_present() -> None:
+    """_apply_outline makes transparent border pixels opaque (halo ring) (D-07).
+
+    A small solid mark placed in the center of a transparent canvas should gain
+    a visible halo of opaque pixels around its original border after _apply_outline.
+    """
+    from matchup_thumbs.generators._outline import _apply_outline
+
+    # Build a logo: 10x10 opaque mark, surrounded by transparent padding on 30x30.
+    canvas = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    inner = Image.new("RGBA", (10, 10), (200, 50, 50, 255))
+    canvas.paste(inner, (10, 10))
+
+    result = _apply_outline(canvas, background_rgb=(200, 50, 50))
+
+    # The corner pixel (0,0) is far from the mark; it may or may not be halo depending
+    # on radius. But a pixel adjacent to the mark border (e.g., (9,9)) should be opaque
+    # after dilation with _OUTLINE_DILATION_RADIUS >= 1.
+    adjacent_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
+    assert adjacent_pixel[3] > 0, (
+        "Expected pixel adjacent to mark to be opaque after halo dilation"
+    )
+
+
+def test_apply_outline_halo_color_dark_background() -> None:
+    """On a dark (near-black) background, _apply_outline picks white halo (D-08)."""
+    from matchup_thumbs.generators._outline import _apply_outline
+
+    # Near-black background → white has higher contrast than black
+    dark_bg: tuple[int, int, int] = (10, 10, 10)
+    logo = _make_solid_logo((255, 255, 255))  # white mark (clearly different)
+    # Place mark in center to ensure adjacent pixels get halo
+    result = _apply_outline(logo, background_rgb=dark_bg)
+
+    # Find an opaque pixel that is NOT part of the original mark (the halo ring).
+    # The original mark occupies (10..109, 10..109) in a 120x120 canvas (per
+    # _make_solid_logo). Check pixel (9, 9) — one pixel outside the mark; after
+    # dilation it should be white (255,255,255).
+    halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
+    # (9,9) is one pixel outside the mark; dilation MUST make it opaque halo.
+    # Assert unconditionally so a broken/zero-radius dilation fails loudly (WR-04).
+    assert halo_pixel[3] == 255, (
+        f"Expected opaque halo at (9,9), got alpha={halo_pixel[3]}"
+    )
+    r = halo_pixel[0]
+    assert r > 128, f"Expected white halo on dark background, got r={r}"
+
+
+def test_apply_outline_halo_color_light_background() -> None:
+    """On a near-white background, _apply_outline picks black halo (D-08)."""
+    from matchup_thumbs.generators._outline import _apply_outline
+
+    # Near-white background → black has higher contrast than white
+    light_bg: tuple[int, int, int] = (245, 245, 245)
+    logo = _make_solid_logo((0, 0, 0))  # black mark
+    result = _apply_outline(logo, background_rgb=light_bg)
+
+    # Check adjacent pixel after dilation — should be dark (halo is black)
+    halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
+    # Unconditional: dilation must make (9,9) opaque halo, else fail loudly (WR-04).
+    assert halo_pixel[3] == 255, (
+        f"Expected opaque halo at (9,9), got alpha={halo_pixel[3]}"
+    )
+    r = halo_pixel[0]
+    assert r < 128, f"Expected black halo on light background, got r={r}"
+
+
+# ---------------------------------------------------------------------------
+# CTR-01: Crimson-on-crimson repro — logo must be discernible (D-11)
+# ---------------------------------------------------------------------------
+
+
+def test_crimson_on_crimson_repro_is_discernible() -> None:
+    """CTR-01 repro: crimson logo on crimson background must become discernible.
+
+    Asserts the ContrastDecision swaps background OR applies OUTLINE.
+    Never asserts a specific pixel color (fragile); asserts the decision action.
+    Uses deterministic synthetic fixtures — no live ESPN call (D-11).
+    """
+    from matchup_thumbs.contrast import Treatment, decide_contrast, dominant_color
+    from matchup_thumbs.generators._color import (
+        NULL_PRIMARY,
+        NULL_SECONDARY,
+        hex_to_rgb,
+    )
+
+    crimson_hex = "#9E1B32"  # Alabama crimson
+    navy_hex = "#14213D"  # contrasting secondary
+    logo = _make_solid_logo((158, 27, 50))  # crimson logo pixels
+
+    primary_rgb = hex_to_rgb(crimson_hex, NULL_PRIMARY)
+    secondary_rgb = hex_to_rgb(navy_hex, NULL_SECONDARY)
+    repr_rgb = dominant_color(logo)
+    decision = decide_contrast(primary_rgb, secondary_rgb, repr_rgb, None)
+
+    # Background must differ from primary OR OUTLINE must be applied
+    if decision.background_rgb == primary_rgb:
+        assert decision.treatment == Treatment.OUTLINE, (
+            "Crimson logo on crimson background must trigger OUTLINE when"
+            " background stays crimson"
+        )
+    # else: background swapped to secondary — discernibility via color swap; test passes
+
+
+# ---------------------------------------------------------------------------
+# TEST-01: Synthetic worst-case — logo color equals background (D-11)
+# ---------------------------------------------------------------------------
+
+
+def test_logo_color_equals_background_treatment_required() -> None:
+    """Synthetic worst case: logo dominant color == both team colors → OUTLINE required.
+
+    When both primary and secondary have 1.0 contrast ratio against the logo
+    representative color (identical colors), the engine must emit OUTLINE.
+    TEST-01, D-11.
+    """
+    from matchup_thumbs.contrast import SelectionReason, Treatment, decide_contrast
+
+    crimson: tuple[int, int, int] = (158, 27, 50)
+    decision = decide_contrast(
+        primary_rgb=crimson,
+        secondary_rgb=crimson,
+        repr_rgb=crimson,
+        logo_variants=None,
+    )
+    assert decision.treatment == Treatment.OUTLINE
+    assert decision.reason == SelectionReason.TREATMENT_REQUIRED
+    assert decision.achieved_ratio == pytest.approx(1.0, abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Contrast-aware background fill in thumb and poster generators (D-02)
+# ---------------------------------------------------------------------------
+
+
+def test_thumb_uses_decision_background_rgb() -> None:
+    """thumb generator fills away/home halves from decision.background_rgb (D-02).
+
+    Supplies a decision whose background_rgb differs from the team's primary_color,
+    verifying the generator reads the decision rather than calling hex_to_rgb(primary).
+    """
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+    from tests.conftest import make_decision
+
+    # Use a background color that differs from the Lakers primary (#552583 = 85,37,131).
+    # We pick bright red (200, 0, 0) as away background via the decision.
+    forced_bg: tuple[int, int, int] = (200, 0, 0)
+    assets = fixture_decoded_assets()
+    assets["away_decision"] = make_decision(background_rgb=forced_bg)
+
+    img = generate_thumb_style0(fixture_lakers(), fixture_clippers(), assets)
+
+    # Top-left corner of the thumb is solidly in the away region; should be forced_bg.
+    pixel = img.getpixel((0, 0))
+    assert pixel[:3] == forced_bg, (
+        f"Expected away background {forced_bg!r} from decision, got {pixel[:3]!r}"
+    )
+
+
+def test_poster_uses_decision_background_rgb() -> None:
+    """poster generator fills away/home bands from decision.background_rgb (D-02).
+
+    Supplies a decision whose background_rgb differs from the team's primary_color,
+    verifying generator reads the decision rather than calling hex_to_rgb(primary).
+    """
+    from matchup_thumbs.generators.poster import generate_poster_style0
+    from tests.conftest import make_decision
+
+    # Use bright green (0, 180, 0) as away background via the decision.
+    forced_bg: tuple[int, int, int] = (0, 180, 0)
+    assets = fixture_decoded_assets()
+    assets["away_decision"] = make_decision(background_rgb=forced_bg)
+
+    img = generate_poster_style0(fixture_lakers(), fixture_clippers(), assets)
+
+    # Top-left corner of the poster is solidly in the away band.
+    pixel = img.getpixel((0, 0))
+    assert pixel[:3] == forced_bg, (
+        f"Expected away background {forced_bg!r} from decision, got {pixel[:3]!r}"
+    )
+
+
+def test_thumb_applies_outline_treatment() -> None:
+    """thumb generator applies _apply_outline when decision.treatment == OUTLINE (D-04).
+
+    Uses a fully-transparent logo; after OUTLINE treatment, adjacent pixels must
+    be opaque (the halo exists). Without the OUTLINE pass, the canvas area where
+    the (transparent) logo would be pasted has no halo, but we can't check that
+    in the canvas directly since a transparent paste changes nothing. Instead we
+    check that a fully-opaque logo with OUTLINE treatment leaves a wider visible
+    border than a logo without OUTLINE (size of logo footprint expands).
+
+    Simpler approach: use a tiny solid logo; with OUTLINE the pixels adjacent to
+    the logo region in the canvas change color (halo bleeds into the background).
+    Without OUTLINE, those pixels remain the background color.
+    """
+    from matchup_thumbs.contrast import Treatment
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+    from tests.conftest import make_decision
+
+    # Build a 5x5 red logo on a transparent 30x30 canvas.
+    small_logo = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    mark = Image.new("RGBA", (5, 5), (255, 50, 50, 255))
+    small_logo.paste(mark, (12, 12))
+
+    # Use a near-white background so the halo will be black (clearly different).
+    bg_white: tuple[int, int, int] = (240, 240, 240)
+    assets_with_outline = fixture_decoded_assets()
+    assets_with_outline["away_logo"] = small_logo
+    assets_with_outline["away_decision"] = make_decision(
+        background_rgb=bg_white, treatment=Treatment.OUTLINE
+    )
+
+    assets_no_outline = fixture_decoded_assets()
+    assets_no_outline["away_logo"] = small_logo
+    assets_no_outline["away_decision"] = make_decision(
+        background_rgb=bg_white,
+        treatment=None,  # Treatment.NONE
+    )
+
+    img_with = generate_thumb_style0(
+        fixture_lakers(), fixture_clippers(), assets_with_outline
+    )
+    img_without = generate_thumb_style0(
+        fixture_lakers(), fixture_clippers(), assets_no_outline
+    )
+
+    # Images should differ when OUTLINE is applied vs not
+    assert img_with.tobytes() != img_without.tobytes(), (
+        "Thumb with OUTLINE should differ from thumb without OUTLINE"
+    )
+
+
+def test_poster_applies_outline_treatment() -> None:
+    """poster generator applies _apply_outline when treatment == OUTLINE (D-04).
+
+    Verifies the OUTLINE path produces a different image than NONE for same logo.
+    """
+    from matchup_thumbs.contrast import Treatment
+    from matchup_thumbs.generators.poster import generate_poster_style0
+    from tests.conftest import make_decision
+
+    small_logo = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    mark = Image.new("RGBA", (5, 5), (255, 50, 50, 255))
+    small_logo.paste(mark, (12, 12))
+
+    bg_white: tuple[int, int, int] = (240, 240, 240)
+
+    assets_with_outline = fixture_decoded_assets()
+    assets_with_outline["away_logo"] = small_logo
+    assets_with_outline["away_decision"] = make_decision(
+        background_rgb=bg_white, treatment=Treatment.OUTLINE
+    )
+
+    assets_no_outline = fixture_decoded_assets()
+    assets_no_outline["away_logo"] = small_logo
+    assets_no_outline["away_decision"] = make_decision(
+        background_rgb=bg_white,
+        treatment=None,  # Treatment.NONE
+    )
+
+    img_with = generate_poster_style0(
+        fixture_lakers(), fixture_clippers(), assets_with_outline
+    )
+    img_without = generate_poster_style0(
+        fixture_lakers(), fixture_clippers(), assets_no_outline
+    )
+
+    assert img_with.tobytes() != img_without.tobytes(), (
+        "Poster with OUTLINE should differ from poster without OUTLINE"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -204,6 +204,9 @@ class SelectionReason(Enum):
     PRIMARY_OK = "primary_ok"
     SWAPPED_TO_SECONDARY = "swapped_to_secondary"
     TREATMENT_REQUIRED = "treatment_required"
+    NULL_COLOR = (
+        "null_color"  # both team colors absent/malformed — legacy grey path (CTR-05)
+    )
 
 
 @dataclass(frozen=True)
