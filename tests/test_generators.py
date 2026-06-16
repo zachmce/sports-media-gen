@@ -232,6 +232,80 @@ def test_malformed_hex_generators_do_not_raise() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 1: _apply_outline unit tests (D-07, D-08, CTR-04)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_outline_preserves_size() -> None:
+    """_apply_outline returns an image with the same dimensions as the input (D-07)."""
+    from matchup_thumbs.generators._outline import _apply_outline
+
+    logo = _make_solid_logo((100, 100, 200))  # opaque blue mark with transparent padding
+    result = _apply_outline(logo, background_rgb=(100, 100, 200))
+    assert result.size == logo.size
+
+
+def test_apply_outline_halo_present() -> None:
+    """_apply_outline makes previously-transparent border pixels opaque (halo ring) (D-07).
+
+    A small solid mark placed in the center of a transparent canvas should gain
+    a visible halo of opaque pixels around its original border after _apply_outline.
+    """
+    from matchup_thumbs.generators._outline import _apply_outline
+
+    # Build a logo: 10x10 opaque mark, surrounded by transparent padding on a 30x30 canvas
+    canvas = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    inner = Image.new("RGBA", (10, 10), (200, 50, 50, 255))
+    canvas.paste(inner, (10, 10))
+
+    result = _apply_outline(canvas, background_rgb=(200, 50, 50))
+    result_pixels = list(result.getdata())
+
+    # The corner pixel (0,0) is far from the mark; it may or may not be halo depending
+    # on radius. But a pixel adjacent to the mark border (e.g., (9,9)) should be opaque
+    # after dilation with _OUTLINE_DILATION_RADIUS >= 1.
+    adjacent_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
+    assert adjacent_pixel[3] > 0, (
+        "Expected pixel adjacent to mark to be opaque after halo dilation"
+    )
+
+
+def test_apply_outline_halo_color_dark_background() -> None:
+    """On a dark (near-black) background, _apply_outline picks white halo (D-08)."""
+    from matchup_thumbs.generators._outline import _apply_outline
+
+    # Near-black background → white has higher contrast than black
+    dark_bg: tuple[int, int, int] = (10, 10, 10)
+    logo = _make_solid_logo((255, 255, 255))  # white mark (clearly different)
+    # Place mark in center to ensure adjacent pixels get halo
+    result = _apply_outline(logo, background_rgb=dark_bg)
+
+    # Find an opaque pixel that is NOT part of the original mark (the halo ring).
+    # The original mark occupies (10..109, 10..109) in a 120x120 canvas (per _make_solid_logo).
+    # Check pixel (9, 9) — one pixel outside the mark; after dilation it should be white (255,255,255).
+    halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
+    if halo_pixel[3] > 0:  # only check color if the pixel is actually in the halo
+        r, g, b = halo_pixel[0], halo_pixel[1], halo_pixel[2]
+        assert r > 128, f"Expected white halo on dark background, got r={r}"
+
+
+def test_apply_outline_halo_color_light_background() -> None:
+    """On a near-white background, _apply_outline picks black halo (D-08)."""
+    from matchup_thumbs.generators._outline import _apply_outline
+
+    # Near-white background → black has higher contrast than white
+    light_bg: tuple[int, int, int] = (245, 245, 245)
+    logo = _make_solid_logo((0, 0, 0))  # black mark
+    result = _apply_outline(logo, background_rgb=light_bg)
+
+    # Check adjacent pixel after dilation — should be dark (halo is black)
+    halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
+    if halo_pixel[3] > 0:
+        r, g, b = halo_pixel[0], halo_pixel[1], halo_pixel[2]
+        assert r < 128, f"Expected black halo on light background, got r={r}"
+
+
+# ---------------------------------------------------------------------------
 # CTR-01: Crimson-on-crimson repro — logo must be discernible (D-11)
 # ---------------------------------------------------------------------------
 
