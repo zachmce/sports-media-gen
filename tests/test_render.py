@@ -950,3 +950,254 @@ async def test_asset_loader_fallback_to_logo_url() -> None:
     # Cached under the :default variant key
     expected_key = f"logo:nba:{lakers_no_variants['espn_id']}:default".encode()
     redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
+
+
+# ---------------------------------------------------------------------------
+# v1.2.1 hotfix — prong 2: post-load variant contrast re-check + fallback
+#
+# WHY prior gates missed the white-on-white bug: existing render fixtures use
+# logo_variants=None + solid crimson logos, so PASS 2 never swaps to a variant
+# and the loaded logo == the logo the decision was computed against.  The
+# Lakers/Clippers golden never swaps either.  These tests exercise the path that
+# DOES swap: a variant is recommended, the loaded variant is a different colour
+# than the default, and that variant fails contrast against the chosen
+# background.
+# ---------------------------------------------------------------------------
+
+
+async def test_variant_recheck_falls_back_when_variant_invisible() -> None:
+    """Prong 2 unit test: a loaded variant that fails contrast → default logo.
+
+    Reproduces the Alabama case at the render layer: the decision swapped the
+    background to a light secondary (white) and recommended a variant, but the
+    loaded variant is a WHITE logo → white-on-white (ratio 1.0).  The re-check
+    must return the crimson DEFAULT logo instead.
+    """
+    from unittest.mock import MagicMock
+
+    from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
+    from matchup_thumbs.render import _variant_contrasts_or_fallback
+    from matchup_thumbs.settings import Settings
+
+    white_variant = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
+    crimson_default = Image.new("RGBA", (100, 100), (158, 27, 50, 255))
+
+    decision = ContrastDecision(
+        background_rgb=(255, 255, 255),  # swapped to a light (white) secondary
+        background_source="secondary",
+        achieved_ratio=7.84,  # crimson default vs white — passed at decision time
+        recommended_variant="dark",  # ESPN "dark" = a WHITE logo
+        treatment=Treatment.NONE,
+        reason=SelectionReason.SWAPPED_TO_SECONDARY,
+    )
+    settings = MagicMock(spec=Settings)
+    settings.min_contrast_ratio = 3.0
+
+    result = await _variant_contrasts_or_fallback(
+        white_variant,
+        crimson_default,
+        decision,
+        settings,
+        league="ncaa/football",
+        espn_id="333",
+    )
+
+    # White variant on white bg is invisible → fell back to the crimson default.
+    assert result is crimson_default
+
+
+async def test_variant_recheck_keeps_variant_when_contrast_holds() -> None:
+    """Prong 2 unit test: a loaded variant that contrasts is kept as-is."""
+    from unittest.mock import MagicMock
+
+    from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
+    from matchup_thumbs.render import _variant_contrasts_or_fallback
+    from matchup_thumbs.settings import Settings
+
+    # Dark navy background; a white variant contrasts it well (~>7:1).
+    white_variant = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
+    crimson_default = Image.new("RGBA", (100, 100), (158, 27, 50, 255))
+
+    decision = ContrastDecision(
+        background_rgb=(29, 66, 138),  # dark navy — white logo is fine here
+        background_source="secondary",
+        achieved_ratio=8.0,
+        recommended_variant="dark",
+        treatment=Treatment.NONE,
+        reason=SelectionReason.SWAPPED_TO_SECONDARY,
+    )
+    settings = MagicMock(spec=Settings)
+    settings.min_contrast_ratio = 3.0
+
+    result = await _variant_contrasts_or_fallback(
+        white_variant,
+        crimson_default,
+        decision,
+        settings,
+        league="ncaa/football",
+        espn_id="333",
+    )
+
+    assert result is white_variant
+
+
+async def test_variant_recheck_noop_when_no_variant_requested() -> None:
+    """Prong 2 unit test: recommended_variant=None returns the loaded logo as-is."""
+    from unittest.mock import MagicMock
+
+    from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
+    from matchup_thumbs.render import _variant_contrasts_or_fallback
+    from matchup_thumbs.settings import Settings
+
+    loaded = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
+    default = Image.new("RGBA", (100, 100), (158, 27, 50, 255))
+
+    decision = ContrastDecision(
+        background_rgb=(255, 255, 255),
+        background_source="primary",
+        achieved_ratio=5.0,
+        recommended_variant=None,  # no swap happened
+        treatment=Treatment.NONE,
+        reason=SelectionReason.PRIMARY_OK,
+    )
+    settings = MagicMock(spec=Settings)
+    settings.min_contrast_ratio = 3.0
+
+    result = await _variant_contrasts_or_fallback(
+        loaded, default, decision, settings, league="nba", espn_id="13"
+    )
+
+    # No variant was requested → loaded logo returned unchanged (no fallback,
+    # and crucially no contrast computation that could mis-fire).
+    assert result is loaded
+
+
+async def test_render_variant_swap_avoids_invisible_logo() -> None:
+    """End-to-end regression: the variant-swap path never reaches the generator
+    with an invisible (white-on-white) home logo.
+
+    This is the path prior gates missed: home team has logo_variants present, the
+    decision swaps to a light secondary and recommends the "dark" (white) variant,
+    and PASS 2 loads that white variant.  Prong 2 must replace it with the crimson
+    default logo BEFORE it is handed to the generator.
+
+    We capture the DecodedAssets passed to the generator and assert the home logo
+    actually contrasts its chosen background at/above min_contrast_ratio.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from matchup_thumbs.contrast import (
+        ContrastDecision,
+        SelectionReason,
+        Treatment,
+        contrast_ratio,
+        dominant_color,
+    )
+    from matchup_thumbs.generators.types import DecodedAssets
+    from matchup_thumbs.render import _render_and_encode
+    from matchup_thumbs.settings import Settings
+
+    white_logo = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
+    crimson_logo = Image.new("RGBA", (100, 100), (158, 27, 50, 255))
+    purple_logo = Image.new("RGBA", (100, 100), (85, 37, 131, 255))
+
+    # Home team: white secondary + a "dark" variant key present (the swap path).
+    home_with_variants: dict[str, object] = {
+        **fixture_clippers(),
+        "primary_color": "#9E1B32",  # crimson — fails vs crimson logo
+        "secondary_color": "#ffffff",  # light → engine swaps here
+        "logo_variants": {
+            "default": "https://example.com/default.png",
+            "dark": "https://example.com/dark.png",
+        },
+    }
+    away = fixture_lakers()  # no variants — control
+
+    # Decisions: away keeps its default; home swapped to white secondary and
+    # (pre-prong-1, hypothetically) recommends the white "dark" variant.  We feed
+    # this directly to prove prong 2 catches it even if a "dark" recommendation
+    # ever reaches the render layer.
+    away_decision = ContrastDecision(
+        background_rgb=(85, 37, 131),
+        background_source="primary",
+        achieved_ratio=6.0,
+        recommended_variant=None,
+        treatment=Treatment.NONE,
+        reason=SelectionReason.PRIMARY_OK,
+    )
+    home_decision = ContrastDecision(
+        background_rgb=(255, 255, 255),  # white secondary
+        background_source="secondary",
+        achieved_ratio=7.84,  # crimson default vs white at decision time
+        recommended_variant="dark",  # white logo → would be invisible
+        treatment=Treatment.NONE,
+        reason=SelectionReason.SWAPPED_TO_SECONDARY,
+    )
+
+    async def fake_load_assets(*args: object, **kwargs: object) -> dict[str, object]:
+        # PASS 1: away=purple default, home=crimson default.
+        return {"away_logo": purple_logo, "home_logo": crimson_logo}
+
+    async def fake_load_one_logo(
+        team: object,
+        redis: object,
+        http_client: object,
+        league: object,
+        settings: object,
+        variant: str = "default",
+    ) -> Image.Image:
+        # PASS 2: the "dark" variant resolves to a WHITE logo; default → crimson.
+        if variant == "dark":
+            return white_logo
+        if team is away:
+            return purple_logo
+        return crimson_logo
+
+    captured: dict[str, DecodedAssets] = {}
+
+    def spy_generator(
+        away: object, home: object, assets: DecodedAssets
+    ) -> Image.Image:
+        captured["assets"] = assets
+        return Image.new("RGB", (1280, 720), (0, 0, 0))
+
+    settings = MagicMock(spec=Settings)
+    settings.min_contrast_ratio = 3.0
+
+    redis = MagicMock()
+    http_client = MagicMock()
+
+    with (
+        patch("matchup_thumbs.render.load_assets", side_effect=fake_load_assets),
+        patch(
+            "matchup_thumbs.render._decide_for_team",
+            new_callable=AsyncMock,
+            side_effect=[away_decision, home_decision],
+        ),
+        patch("matchup_thumbs.render._load_one_logo", side_effect=fake_load_one_logo),
+        patch("matchup_thumbs.render.get_generator", return_value=spy_generator),
+    ):
+        out = await _render_and_encode(
+            league="ncaa/football",
+            away=away,  # type: ignore[arg-type]
+            home=home_with_variants,  # type: ignore[arg-type]
+            kind="thumb",
+            style=0,
+            redis=redis,
+            http_client=http_client,
+            settings=settings,
+        )
+
+    assert isinstance(out, bytes) and len(out) > 0
+
+    # The generator must have received a home logo that CONTRASTS its background —
+    # i.e. the crimson default, not the invisible white "dark" variant.
+    home_logo_used = captured["assets"]["home_logo"]
+    used_repr = dominant_color(home_logo_used)
+    ratio = contrast_ratio(used_repr, home_decision.background_rgb)
+    assert ratio >= settings.min_contrast_ratio, (
+        f"home logo is invisible against its background (ratio {ratio:.2f}) — "
+        "prong 2 did not fall back to the default logo"
+    )
+    # Concretely: it is the crimson default, not the white variant.
+    assert home_logo_used is crimson_logo

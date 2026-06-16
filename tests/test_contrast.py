@@ -407,10 +407,11 @@ def test_decide_light_secondary_does_not_recommend_dark() -> None:
       so the engine swaps to secondary)
     - logo_variants: contains "dark" key (the white ESPN variant)
     - Expected: background_source == "secondary", recommended_variant is None
-      (because the chosen background is light — recommending 'dark' here = white-on-white)
+      (the chosen background is light — recommending 'dark' here = white-on-white)
     """
-    _CRIMSON: tuple[int, int, int] = (158, 27, 50)   # Alabama-ish crimson logo
-    _CRIMSON_PRIMARY: tuple[int, int, int] = (158, 27, 50)  # same color → ratio=1.0 fails
+    _CRIMSON: tuple[int, int, int] = (158, 27, 50)  # Alabama-ish crimson logo
+    # Same color as the logo repr → contrast ratio 1.0 → fails the 3.0 threshold.
+    _CRIMSON_PRIMARY: tuple[int, int, int] = (158, 27, 50)
     _WHITE_SECONDARY: tuple[int, int, int] = (255, 255, 255)  # light secondary
 
     logo_variants = {

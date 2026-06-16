@@ -50,6 +50,7 @@ from .contrast import (
     ContrastDecision,
     SelectionReason,
     Treatment,
+    contrast_ratio,
     decide_contrast,
     dominant_color,
 )
@@ -296,6 +297,58 @@ def _encode_png(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
+async def _variant_contrasts_or_fallback(
+    loaded_logo: Image.Image,
+    default_logo: Image.Image,
+    decision: ContrastDecision,
+    settings: Settings,
+    *,
+    league: str,
+    espn_id: str,
+) -> Image.Image:
+    """Re-check a swapped-in variant against its background; fall back if invisible.
+
+    Prong 2 of the v1.2.1 hotfix and the safety net for D-03.  The contrast
+    decision is computed on the DEFAULT logo (``_decide_for_team``), but PASS 2
+    may load a DIFFERENTLY-COLOURED variant.  A correct decision can therefore be
+    silently undone by the swap — e.g. a white ``"dark"`` variant landing on a
+    light background (the white-on-white bug).  Prong 1 prevents the known case,
+    but this re-check guarantees no variant swap ever yields an invisible logo.
+
+    When a non-default variant was actually requested, recompute the LOADED
+    logo's dominant colour and measure its contrast against
+    ``decision.background_rgb``.  If it falls below ``settings.min_contrast_ratio``,
+    fall back to ``default_logo`` — the image the decision was computed against,
+    so it is guaranteed to clear the bar.  Otherwise return ``loaded_logo``
+    unchanged.
+
+    Re-uses already-loaded images only — no new network I/O.  ``dominant_color``
+    is CPU-bound and dispatched to the thread pool (GEN-04), matching
+    ``_decide_for_team``.
+    """
+    if decision.recommended_variant is None:
+        return loaded_logo
+    loaded_repr: tuple[int, int, int] = await anyio.to_thread.run_sync(
+        dominant_color, loaded_logo
+    )
+    ratio = contrast_ratio(loaded_repr, decision.background_rgb)
+    if ratio >= settings.min_contrast_ratio:
+        return loaded_logo
+    # The loaded variant is invisible (or near-invisible) against the chosen
+    # background.  Fall back to the default logo and surface it — no silent
+    # failure (AGENTS.md).
+    await logger.awarning(
+        "variant_contrast_recheck_fallback",
+        league=league,
+        espn_id=espn_id,
+        variant=decision.recommended_variant,
+        achieved_ratio=round(ratio, 3),
+        min_ratio=settings.min_contrast_ratio,
+        background_rgb=decision.background_rgb,
+    )
+    return default_logo
+
+
 async def _render_and_encode(
     league: str,
     away: TeamDict,
@@ -345,6 +398,28 @@ async def _render_and_encode(
     )
     home_logo_final = await _load_one_logo(
         home, redis, http_client, league, settings, variant=home_variant
+    )
+
+    # PASS 2 RE-CHECK (prong 2, v1.2.1 — D-03 safety net): the contrast decision
+    # was computed on the DEFAULT logo, but the variants loaded above may be a
+    # different colour.  Re-check each loaded variant against its chosen
+    # background and fall back to the default logo if the swap would render an
+    # invisible logo.  Re-uses already-loaded images — no new network I/O.
+    away_logo_final = await _variant_contrasts_or_fallback(
+        away_logo_final,
+        default_logos["away_logo"],
+        away_decision,
+        settings,
+        league=league,
+        espn_id=away["espn_id"],
+    )
+    home_logo_final = await _variant_contrasts_or_fallback(
+        home_logo_final,
+        default_logos["home_logo"],
+        home_decision,
+        settings,
+        league=league,
+        espn_id=home["espn_id"],
     )
 
     # Enrich DecodedAssets with both logos and decisions (D-02).
