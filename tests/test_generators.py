@@ -154,21 +154,28 @@ def test_registry_lookup() -> None:
 
 
 def test_null_color_fallback() -> None:
-    """Generators render without error when team primary_color is None (D-15).
+    """Generators render without error when team primary_color is None (D-15, CTR-05).
 
-    When primary_color is None the generator must use the named grey fallback
-    constants (_NULL_PRIMARY = #3A3A3A = (58, 58, 58)) rather than raise.
-    The away-team region (upper-left before the diagonal seam) should be grey.
+    After Phase 10 D-02, the generator reads background_rgb from the ContrastDecision
+    rather than calling hex_to_rgb(primary_color).  The CTR-05 null-color guard lives
+    in the render layer (plan 10-03), which emits a legacy decision with
+    background_rgb = NULL_PRIMARY.  This test simulates that by passing a grey
+    decision, confirming the generator paints grey at (0,0).
     """
-    from matchup_thumbs.generators.thumb import _NULL_PRIMARY, generate_thumb_style0
+    from matchup_thumbs.generators._color import NULL_PRIMARY as _NULL_PRIMARY
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+    from tests.conftest import make_decision
 
     no_color_lakers: dict[str, Any] = {**fixture_lakers(), "primary_color": None}
     no_color_clippers: dict[str, Any] = {**fixture_clippers(), "primary_color": None}
 
+    # Simulate the render layer's legacy grey decision for color-less teams (CTR-05).
+    assets = fixture_decoded_assets()
+    assets["away_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+    assets["home_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+
     # Must not raise; result must still be the correct canvas size
-    img = generate_thumb_style0(
-        no_color_lakers, no_color_clippers, fixture_decoded_assets()
-    )
+    img = generate_thumb_style0(no_color_lakers, no_color_clippers, assets)
     assert img.size == (1280, 720)
 
     # The top-left corner (away region, solidly in the away colour triangle
