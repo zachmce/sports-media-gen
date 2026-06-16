@@ -293,6 +293,125 @@ def test_render_version_default_is_2() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CTR-05 / D-10: _is_null_color_str truth table
+# ---------------------------------------------------------------------------
+
+
+def test_is_null_color_str_truth_table() -> None:
+    """_is_null_color_str returns True for absent/malformed strings, False for valid hex.
+
+    Inspects the raw string — NOT the parsed tuple — so a real grey '#3A3A3A'
+    is NOT treated as null even though it parses to the same tuple as NULL_PRIMARY.
+    (D-10, CTR-05, RESEARCH 'Don't Hand-Roll')
+    """
+    from matchup_thumbs.render import _is_null_color_str
+
+    # --- Null cases (True) ---
+    assert _is_null_color_str(None) is True       # missing
+    assert _is_null_color_str("") is True          # empty string
+    assert _is_null_color_str("#ABC") is True      # CSS shorthand (3-digit)
+    assert _is_null_color_str("ABC") is True       # missing hash, 3-char
+    assert _is_null_color_str("#GGGGGG") is True   # non-hex characters
+    assert _is_null_color_str("#12345") is True    # 5 hex digits (too short)
+    assert _is_null_color_str("#1234567") is True  # 7 hex digits (too long)
+
+    # --- Valid hex cases (False) ---
+    assert _is_null_color_str("#3A3A3A") is False  # real grey (== NULL_PRIMARY parsed)
+    assert _is_null_color_str("#9E1B32") is False  # Alabama crimson
+    assert _is_null_color_str("#FFFFFF") is False  # white
+    assert _is_null_color_str("#000000") is False  # black
+    assert _is_null_color_str("3A3A3A") is False   # valid hex without leading #
+
+
+# ---------------------------------------------------------------------------
+# CTR-05 / D-10: _decide_for_team short-circuits on both-null colors
+# ---------------------------------------------------------------------------
+
+
+async def test_decide_for_team_null_colors_legacy_decision() -> None:
+    """_decide_for_team returns a legacy grey ContrastDecision when both
+    primary_color and secondary_color are absent/malformed, WITHOUT calling
+    decide_contrast (D-10, CTR-05).
+
+    The legacy decision must have:
+    - background_rgb == NULL_PRIMARY (grey)
+    - treatment == Treatment.NONE
+    - recommended_variant is None
+    """
+    from unittest.mock import MagicMock, patch
+
+    from matchup_thumbs.contrast import Treatment
+    from matchup_thumbs.generators._color import NULL_PRIMARY
+    from matchup_thumbs.render import _decide_for_team
+    from matchup_thumbs.settings import Settings
+
+    team_no_colors: dict[str, object] = {
+        **fixture_lakers(),
+        "primary_color": None,
+        "secondary_color": None,
+    }
+    placeholder_logo = Image.new("RGBA", (100, 100), (128, 128, 128, 255))
+    settings = MagicMock(spec=Settings)
+    settings.min_contrast_ratio = 3.0
+
+    with patch("matchup_thumbs.render.decide_contrast") as mock_decide:
+        decision = await _decide_for_team(team_no_colors, placeholder_logo, settings)  # type: ignore[arg-type]
+
+    # Engine must NOT have been called
+    mock_decide.assert_not_called()
+
+    assert decision.background_rgb == NULL_PRIMARY
+    assert decision.treatment == Treatment.NONE
+    assert decision.recommended_variant is None
+
+
+async def test_decide_for_team_one_valid_color_calls_engine() -> None:
+    """_decide_for_team calls the contrast engine when at least one color is valid (D-10).
+
+    If only primary_color is absent but secondary_color is valid (or vice versa),
+    the engine must still run — the CTR-05 guard requires BOTH to be null to
+    short-circuit.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
+    from matchup_thumbs.generators._color import NULL_PRIMARY, NULL_SECONDARY
+    from matchup_thumbs.render import _decide_for_team
+    from matchup_thumbs.settings import Settings
+
+    team_one_valid: dict[str, object] = {
+        **fixture_lakers(),
+        "primary_color": None,        # absent
+        "secondary_color": "#9E1B32", # valid
+    }
+    logo = Image.new("RGBA", (100, 100), (158, 27, 50, 255))
+    settings = MagicMock(spec=Settings)
+    settings.min_contrast_ratio = 3.0
+
+    fake_decision = ContrastDecision(
+        background_rgb=NULL_SECONDARY,
+        background_source="secondary",
+        achieved_ratio=4.5,
+        recommended_variant=None,
+        treatment=Treatment.NONE,
+        reason=SelectionReason.PRIMARY_OK,
+    )
+
+    with (
+        patch("matchup_thumbs.render.decide_contrast", return_value=fake_decision) as mock_dc,
+        patch(
+            "matchup_thumbs.render.anyio.to_thread.run_sync",
+            new_callable=AsyncMock,
+            return_value=(158, 27, 50),
+        ) as mock_run,
+    ):
+        decision = await _decide_for_team(team_one_valid, logo, settings)  # type: ignore[arg-type]
+
+    mock_dc.assert_called_once()
+    assert decision is fake_decision
+
+
+# ---------------------------------------------------------------------------
 # CACHE-04: Cache hit returns cached bytes without re-rendering
 # ---------------------------------------------------------------------------
 
