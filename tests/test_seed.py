@@ -171,9 +171,7 @@ def test_build_logo_variants() -> None:
     variants = build_logo_variants(logos, "los-angeles-lakers", "nba")
 
     assert variants["default"] == "https://a.espncdn.com/i/teamlogos/nba/500/lal.png"
-    assert (
-        variants["dark"] == "https://a.espncdn.com/i/teamlogos/nba/500-dark/lal.png"
-    )
+    assert variants["dark"] == "https://a.espncdn.com/i/teamlogos/nba/500-dark/lal.png"
     assert variants["primary_logo_on_primary_color"] == (
         "https://a.espncdn.com/i/teamlogos/nba/500/primary_on_primary/lal.png"
     )
