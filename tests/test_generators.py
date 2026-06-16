@@ -259,7 +259,6 @@ def test_apply_outline_halo_present() -> None:
     canvas.paste(inner, (10, 10))
 
     result = _apply_outline(canvas, background_rgb=(200, 50, 50))
-    result_pixels = list(result.getdata())
 
     # The corner pixel (0,0) is far from the mark; it may or may not be halo depending
     # on radius. But a pixel adjacent to the mark border (e.g., (9,9)) should be opaque
