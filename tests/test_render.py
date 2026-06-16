@@ -1271,6 +1271,11 @@ async def test_render_variant_swap_avoids_invisible_logo() -> None:
         ),
         patch("matchup_thumbs.render._load_one_logo", side_effect=fake_load_one_logo),
         patch("matchup_thumbs.render.get_generator", return_value=spy_generator),
+        patch(
+            "matchup_thumbs.render.load_league_logo",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         out = await _render_and_encode(
             league="ncaa/football",

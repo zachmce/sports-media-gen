@@ -46,7 +46,7 @@ import structlog
 from PIL import Image
 from redis.asyncio import Redis  # bare Redis — not generic at runtime
 
-from .assets.loader import _load_one_logo, load_assets
+from .assets.loader import _load_one_logo, load_assets, load_league_logo
 from .contrast import (
     ContrastDecision,
     SelectionReason,
@@ -54,6 +54,7 @@ from .contrast import (
     contrast_ratio,
     decide_contrast,
     dominant_color,
+    select_league_logo_variant,
 )
 from .generators import get_generator
 from .generators._color import NULL_PRIMARY, NULL_SECONDARY, hex_to_rgb
@@ -403,6 +404,25 @@ async def _enforce_logo_contrast(
     return logo, decision
 
 
+def _blend_seam_color(
+    away_rgb: tuple[int, int, int],
+    home_rgb: tuple[int, int, int],
+) -> tuple[int, int, int]:
+    """Return the 50/50 per-channel average of away and home background colours.
+
+    Used as the seam reference colour for league-logo variant selection (D-09).
+    A simple average is sufficient for the WCAG luminance gate — Phase 12 can
+    refine this if a weighted blend is needed.
+
+    Pure function — no I/O.
+    """
+    return (
+        (away_rgb[0] + home_rgb[0]) // 2,
+        (away_rgb[1] + home_rgb[1]) // 2,
+        (away_rgb[2] + home_rgb[2]) // 2,
+    )
+
+
 async def _render_and_encode(
     league: str,
     away: TeamDict,
@@ -478,15 +498,32 @@ async def _render_and_encode(
         espn_id=home["espn_id"],
     )
 
-    # Enrich DecodedAssets with both logos and decisions (D-02).
-    # Phase 11: league_logo wired in by the load_league_logo call added in 11-03.
-    # Set to None here so the TypedDict contract is satisfied until 11-03 lands.
+    # LEAGUE LOGO: blend seam colour, select variant, load from Redis
+    # (Phase 11 — D-08, D-09).  seam_rgb is the 50/50 average of the two
+    # team background colours — a lightweight proxy for the generator's
+    # diagonal blend zone.
+    seam_rgb: tuple[int, int, int] = _blend_seam_color(
+        away_decision.background_rgb, home_decision.background_rgb
+    )
+    # Phase 11: logo_variants=None → always returns "default".  The leagues
+    # table is not fetched at render time this phase; the seed guarantees
+    # leaguelogo:{slug}:default is warmed (D-06).  Phase 12 will surface
+    # logo_variants from the leagues table for dark-variant selection.
+    league_variant: str = select_league_logo_variant(seam_rgb, None)
+    league_logo: Image.Image | None = await load_league_logo(
+        slug=league,
+        variant=league_variant,
+        redis=redis,
+        settings=settings,
+    )
+
+    # Enrich DecodedAssets with both logos, decisions, and league logo (D-02, D-08).
     assets: DecodedAssets = DecodedAssets(
         away_logo=away_logo_final,
         home_logo=home_logo_final,
         away_decision=away_decision,
         home_decision=home_decision,
-        league_logo=None,  # Phase 11 (D-08) — fully wired in 11-03
+        league_logo=league_logo,
     )
 
     gen_fn = get_generator(kind, style)
