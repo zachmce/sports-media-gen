@@ -973,12 +973,17 @@ async def test_variant_recheck_falls_back_when_variant_invisible() -> None:
     Reproduces the Alabama case at the render layer: the decision swapped the
     background to a light secondary (white) and recommended a variant, but the
     loaded variant is a WHITE logo → white-on-white (ratio 1.0).  The re-check
-    must return the crimson DEFAULT logo instead.
+    must return the crimson DEFAULT logo (which contrasts white) and its ratio.
     """
     from unittest.mock import MagicMock
 
-    from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
-    from matchup_thumbs.render import _variant_contrasts_or_fallback
+    from matchup_thumbs.contrast import (
+        ContrastDecision,
+        SelectionReason,
+        Treatment,
+        contrast_ratio,
+    )
+    from matchup_thumbs.render import _resolve_variant_logo
     from matchup_thumbs.settings import Settings
 
     white_variant = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
@@ -995,7 +1000,7 @@ async def test_variant_recheck_falls_back_when_variant_invisible() -> None:
     settings = MagicMock(spec=Settings)
     settings.min_contrast_ratio = 3.0
 
-    result = await _variant_contrasts_or_fallback(
+    logo, ratio = await _resolve_variant_logo(
         white_variant,
         crimson_default,
         decision,
@@ -1004,8 +1009,11 @@ async def test_variant_recheck_falls_back_when_variant_invisible() -> None:
         espn_id="333",
     )
 
-    # White variant on white bg is invisible → fell back to the crimson default.
-    assert result is crimson_default
+    # White variant on white bg is invisible → fell back to the crimson default,
+    # and the returned ratio is the default's (crimson vs white, clears the bar).
+    assert logo is crimson_default
+    assert ratio == pytest.approx(contrast_ratio((158, 27, 50), (255, 255, 255)))
+    assert ratio >= settings.min_contrast_ratio
 
 
 async def test_variant_recheck_keeps_variant_when_contrast_holds() -> None:
@@ -1013,7 +1021,7 @@ async def test_variant_recheck_keeps_variant_when_contrast_holds() -> None:
     from unittest.mock import MagicMock
 
     from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
-    from matchup_thumbs.render import _variant_contrasts_or_fallback
+    from matchup_thumbs.render import _resolve_variant_logo
     from matchup_thumbs.settings import Settings
 
     # Dark navy background; a white variant contrasts it well (~>7:1).
@@ -1022,16 +1030,16 @@ async def test_variant_recheck_keeps_variant_when_contrast_holds() -> None:
 
     decision = ContrastDecision(
         background_rgb=(29, 66, 138),  # dark navy — white logo is fine here
-        background_source="secondary",
+        background_source="primary",
         achieved_ratio=8.0,
         recommended_variant="dark",
         treatment=Treatment.NONE,
-        reason=SelectionReason.SWAPPED_TO_SECONDARY,
+        reason=SelectionReason.PRIMARY_LIGHT_VARIANT,
     )
     settings = MagicMock(spec=Settings)
     settings.min_contrast_ratio = 3.0
 
-    result = await _variant_contrasts_or_fallback(
+    logo, ratio = await _resolve_variant_logo(
         white_variant,
         crimson_default,
         decision,
@@ -1040,7 +1048,8 @@ async def test_variant_recheck_keeps_variant_when_contrast_holds() -> None:
         espn_id="333",
     )
 
-    assert result is white_variant
+    assert logo is white_variant
+    assert ratio >= settings.min_contrast_ratio
 
 
 async def test_variant_recheck_noop_when_no_variant_requested() -> None:
@@ -1048,7 +1057,7 @@ async def test_variant_recheck_noop_when_no_variant_requested() -> None:
     from unittest.mock import MagicMock
 
     from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
-    from matchup_thumbs.render import _variant_contrasts_or_fallback
+    from matchup_thumbs.render import _resolve_variant_logo
     from matchup_thumbs.settings import Settings
 
     loaded = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
@@ -1065,13 +1074,99 @@ async def test_variant_recheck_noop_when_no_variant_requested() -> None:
     settings = MagicMock(spec=Settings)
     settings.min_contrast_ratio = 3.0
 
-    result = await _variant_contrasts_or_fallback(
+    logo, ratio = await _resolve_variant_logo(
         loaded, default, decision, settings, league="nba", espn_id="13"
     )
 
-    # No variant was requested → loaded logo returned unchanged (no fallback,
-    # and crucially no contrast computation that could mis-fire).
-    assert result is loaded
+    # No variant was requested → loaded logo returned unchanged with the decision's
+    # own achieved_ratio (no contrast computation that could mis-fire).
+    assert logo is loaded
+    assert ratio == 5.0
+
+
+async def test_enforce_logo_contrast_escalates_to_outline() -> None:
+    """When the best logo still under-contrasts the bg, escalate to OUTLINE.
+
+    Reproduces the Cincinnati Reds / Detroit Red Wings case: the vibrant strategy
+    kept the primary (red) background and requested the "dark" variant, but that
+    variant is itself a RED logo (not solid white).  Both the variant and the
+    default clash with the red background, so no image swap can fix it — the
+    render layer must force an OUTLINE halo so the generator draws a contrasting
+    silhouette.  Crisp white-on-colour logos (which already clear the bar) must
+    NOT be escalated.
+    """
+    from unittest.mock import MagicMock
+
+    from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
+    from matchup_thumbs.render import _enforce_logo_contrast
+    from matchup_thumbs.settings import Settings
+
+    red_bg = (198, 1, 31)  # Reds red primary
+    red_variant = Image.new("RGBA", (100, 100), (198, 1, 31, 255))  # "dark" = red
+    red_default = Image.new("RGBA", (100, 100), (198, 1, 31, 255))  # default = red
+
+    decision = ContrastDecision(
+        background_rgb=red_bg,
+        background_source="primary",
+        achieved_ratio=4.0,  # optimistic (engine modelled the variant as white)
+        recommended_variant="dark",
+        treatment=Treatment.NONE,
+        reason=SelectionReason.PRIMARY_LIGHT_VARIANT,
+    )
+    settings = MagicMock(spec=Settings)
+    settings.min_contrast_ratio = 3.0
+
+    logo, new_decision = await _enforce_logo_contrast(
+        red_variant,
+        red_default,
+        decision,
+        settings,
+        league="mlb",
+        espn_id="17",
+    )
+
+    # Red-on-red can't be fixed by swapping the image → OUTLINE is forced and the
+    # recorded ratio is corrected to the measured (sub-threshold) value.
+    assert new_decision.treatment == Treatment.OUTLINE
+    assert new_decision.achieved_ratio < settings.min_contrast_ratio
+    assert isinstance(logo, Image.Image)
+
+
+async def test_enforce_logo_contrast_no_outline_when_legible() -> None:
+    """A crisp white-on-colour logo clears the bar → decision untouched, no halo."""
+    from unittest.mock import MagicMock
+
+    from matchup_thumbs.contrast import ContrastDecision, SelectionReason, Treatment
+    from matchup_thumbs.render import _enforce_logo_contrast
+    from matchup_thumbs.settings import Settings
+
+    crimson_bg = (158, 27, 50)
+    white_variant = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
+    crimson_default = Image.new("RGBA", (100, 100), (158, 27, 50, 255))
+
+    decision = ContrastDecision(
+        background_rgb=crimson_bg,
+        background_source="primary",
+        achieved_ratio=5.9,
+        recommended_variant="dark",
+        treatment=Treatment.NONE,
+        reason=SelectionReason.PRIMARY_LIGHT_VARIANT,
+    )
+    settings = MagicMock(spec=Settings)
+    settings.min_contrast_ratio = 3.0
+
+    logo, new_decision = await _enforce_logo_contrast(
+        white_variant,
+        crimson_default,
+        decision,
+        settings,
+        league="ncaa/football",
+        espn_id="333",
+    )
+
+    assert logo is white_variant
+    assert new_decision.treatment == Treatment.NONE  # no halo on a legible logo
+    assert new_decision is decision  # unchanged when already legible
 
 
 async def test_render_variant_swap_avoids_invisible_logo() -> None:
