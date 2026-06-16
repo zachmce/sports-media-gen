@@ -19,6 +19,8 @@ from pytest_httpx import HTTPXMock
 from matchup_thumbs.assets import get_placeholder_logo
 from matchup_thumbs.espn.client import (
     LEAGUE_ENDPOINTS,
+    build_logo_variants,
+    derive_variant_key,
     fetch_logo_bytes,
     fetch_teams,
     select_logo_url,
@@ -126,6 +128,82 @@ def test_select_logo_url_scoreboard_not_selected_as_default() -> None:
     # scoreboard is filtered out in step 1; dark is found in step 2
     result = select_logo_url(logos)
     assert result == "https://espn.com/dark.png"
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (08-02): derive_variant_key + build_logo_variants — unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_derive_variant_key() -> None:
+    """derive_variant_key maps ESPN rel lists to canonical keys (LOGO-01 / D-03)."""
+    # Standard variants
+    assert derive_variant_key(["full", "default"]) == "default"
+    assert derive_variant_key(["full", "dark"]) == "dark"
+    assert derive_variant_key(["full", "scoreboard"]) == "scoreboard"
+    # Multi-tag: sorted alphabetically and joined with "_"
+    assert derive_variant_key(["full", "scoreboard", "dark"]) == "dark_scoreboard"
+    # Edge case: only "full" → empty remainder → "default"
+    assert derive_variant_key(["full"]) == "default"
+    # Purpose-built color variant (Phase 10 target)
+    assert (
+        derive_variant_key(["full", "primary_logo_on_primary_color"])
+        == "primary_logo_on_primary_color"
+    )
+
+
+def test_build_logo_variants() -> None:
+    """build_logo_variants returns all expected keys from the extended fixture."""
+    logos = [
+        ESPNLogo(
+            href="https://a.espncdn.com/i/teamlogos/nba/500/lal.png",
+            rel=["full", "default"],
+        ),
+        ESPNLogo(
+            href="https://a.espncdn.com/i/teamlogos/nba/500-dark/lal.png",
+            rel=["full", "dark"],
+        ),
+        ESPNLogo(
+            href="https://a.espncdn.com/i/teamlogos/nba/500/primary_on_primary/lal.png",
+            rel=["full", "primary_logo_on_primary_color"],
+        ),
+    ]
+    variants = build_logo_variants(logos, "los-angeles-lakers", "nba")
+
+    assert variants["default"] == "https://a.espncdn.com/i/teamlogos/nba/500/lal.png"
+    assert variants["dark"] == "https://a.espncdn.com/i/teamlogos/nba/500-dark/lal.png"
+    assert variants["primary_logo_on_primary_color"] == (
+        "https://a.espncdn.com/i/teamlogos/nba/500/primary_on_primary/lal.png"
+    )
+    # All three keys are present
+    assert set(variants.keys()) == {"default", "dark", "primary_logo_on_primary_color"}
+
+    # Empty logos array → empty dict
+    assert build_logo_variants([], "los-angeles-lakers", "nba") == {}
+
+
+def test_build_logo_variants_collision() -> None:
+    """Two logos producing the same key → last-write-wins (D-03).
+
+    The final href in the map must be the second logo's href, and no exception
+    should be raised (the collision is logged as a warning, not an error).
+    """
+    first_logo = ESPNLogo(
+        href="https://a.espncdn.com/first.png",
+        rel=["full", "default"],
+    )
+    second_logo = ESPNLogo(
+        href="https://a.espncdn.com/second.png",
+        rel=["full", "default"],
+    )
+    variants = build_logo_variants(
+        [first_logo, second_logo], "test-team", "test-league"
+    )
+
+    # Last-write-wins: second logo's href overwrites first
+    assert variants["default"] == "https://a.espncdn.com/second.png"
+    # Only one key in the map (no duplicate keys)
+    assert list(variants.keys()) == ["default"]
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +385,168 @@ async def test_seed_upsert_idempotent(espn_nba_fixture: dict[str, Any]) -> None:
                 """
             )
         # psycopg commit happens on context manager exit (no explicit commit needed)
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (08-03): test_seed_upsert_preserves_logo_variants — pg-guarded (LOGO-02)
+# ---------------------------------------------------------------------------
+
+
+@pg_required
+async def test_seed_upsert_preserves_logo_variants(
+    espn_nba_fixture: dict[str, Any],
+) -> None:
+    """LOGO-02: seed persists logo_variants and re-running seed is idempotent.
+
+    Drives the real seed path via mocked httpx against the extended NBA fixture,
+    then verifies with a sync psycopg connection:
+    (1) The Lakers' logo_variants is a non-empty dict containing expected keys.
+    (2) Re-running seed leaves exactly one row for the Lakers (no duplicate).
+    (3) The logo_variants value is preserved/replaced (no orphaned partial data).
+    """
+    import os
+
+    from psycopg_pool import AsyncConnectionPool
+    from redis.asyncio import Redis
+
+    from matchup_thumbs.seed import run as seed_run
+
+    postgres_dsn = os.environ.get("POSTGRES_DSN", "")
+    raw_dsn = postgres_dsn.replace("postgresql+psycopg://", "postgresql://")
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+    league_slug = "nba"
+    path, limit = LEAGUE_ENDPOINTS[league_slug]
+    base_url = "https://site.api.espn.com"
+    espn_url = f"{base_url}/apis/site/v2/sports/{path}/teams?limit={limit}"
+
+    conninfo = raw_dsn
+    lakers_slug = "los-angeles-lakers"
+
+    try:
+        async with AsyncConnectionPool(
+            conninfo=conninfo, min_size=1, max_size=2
+        ) as pool:
+            redis_client: Redis = Redis.from_url(redis_url, decode_responses=False)
+            try:
+                # First seed run
+                transport1 = httpx.MockTransport(
+                    handler=_make_espn_mock_handler(espn_url, espn_nba_fixture)
+                )
+                async with httpx.AsyncClient(transport=transport1) as http_client:
+                    await seed_run(pool, redis_client, http_client, [league_slug])
+
+                # (1) Assert logo_variants is a non-empty dict with expected keys
+                with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT logo_variants, COUNT(*) AS row_count
+                        FROM teams t
+                        JOIN leagues l ON l.id = t.league_id
+                        WHERE l.slug = %(league)s
+                          AND t.slug = %(slug)s
+                        GROUP BY logo_variants
+                        """,
+                        {"league": league_slug, "slug": lakers_slug},
+                    )
+                    rows = cur.fetchall()
+
+                assert len(rows) == 1, (
+                    f"Expected exactly 1 distinct logo_variants row for Lakers "
+                    f"after first seed, got {len(rows)}"
+                )
+                variants_after_first: Any = rows[0][0]
+                assert isinstance(variants_after_first, dict), (
+                    f"logo_variants must be a dict (psycopg3 auto-deserializes jsonb), "
+                    f"got {type(variants_after_first)}"
+                )
+                assert len(variants_after_first) > 0, (
+                    "logo_variants must be non-empty for Lakers (fixture has 5 logos)"
+                )
+                # Extended fixture includes: default, dark, scoreboard,
+                # primary_logo_on_primary_color, primary_logo_on_white_color
+                assert "default" in variants_after_first, (
+                    "logo_variants must contain 'default' key"
+                )
+                assert "primary_logo_on_primary_color" in variants_after_first, (
+                    "logo_variants must contain 'primary_logo_on_primary_color' key "
+                    "(Phase 10 target variant)"
+                )
+
+                # Second seed run (idempotent)
+                transport2 = httpx.MockTransport(
+                    handler=_make_espn_mock_handler(espn_url, espn_nba_fixture)
+                )
+                async with httpx.AsyncClient(transport=transport2) as http_client2:
+                    await seed_run(pool, redis_client, http_client2, [league_slug])
+
+                # (2) Assert no duplicate rows after re-seed
+                with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) FROM teams t
+                        JOIN leagues l ON l.id = t.league_id
+                        WHERE l.slug = %(league)s
+                          AND t.slug = %(slug)s
+                        """,
+                        {"league": league_slug, "slug": lakers_slug},
+                    )
+                    count_row = cur.fetchone()
+
+                assert count_row is not None
+                row_count: int = count_row[0]
+                assert row_count == 1, (
+                    f"Re-seed must not duplicate rows: expected 1, got {row_count}"
+                )
+
+                # (3) Assert logo_variants value is preserved/replaced after re-seed
+                with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT logo_variants FROM teams t
+                        JOIN leagues l ON l.id = t.league_id
+                        WHERE l.slug = %(league)s
+                          AND t.slug = %(slug)s
+                        LIMIT 1
+                        """,
+                        {"league": league_slug, "slug": lakers_slug},
+                    )
+                    variant_row = cur.fetchone()
+
+                assert variant_row is not None
+                variants_after_second: Any = variant_row[0]
+                assert isinstance(variants_after_second, dict), (
+                    "logo_variants must still be a dict after re-seed"
+                )
+                assert variants_after_second == variants_after_first, (
+                    "logo_variants must be identical after re-seed (idempotent upsert)"
+                )
+
+            finally:
+                await redis_client.aclose()
+    finally:
+        # Cleanup: remove seeded test rows
+        with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM team_aliases
+                WHERE team_id IN (
+                    SELECT t.id FROM teams t
+                    JOIN leagues l ON l.id = t.league_id
+                    WHERE l.slug = 'nba'
+                      AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
+                )
+                """
+            )
+            cur.execute(
+                """
+                DELETE FROM teams t
+                USING leagues l
+                WHERE l.id = t.league_id
+                  AND l.slug = 'nba'
+                  AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
+                """
+            )
 
 
 # ---------------------------------------------------------------------------

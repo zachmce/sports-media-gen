@@ -36,12 +36,14 @@ from collections.abc import Sequence
 
 import httpx
 import structlog
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 from redis.asyncio import Redis
 
 from .assets import get_placeholder_logo
 from .espn.client import (
     LEAGUE_ENDPOINTS,
+    build_logo_variants,
     fetch_logo_bytes,
     fetch_teams,
     select_logo_url,
@@ -190,6 +192,7 @@ async def run(
                 f"#{team.alternateColor.lstrip('#')}" if team.alternateColor else None
             )
             logo_url = select_logo_url(team.logos)
+            variant_map = build_logo_variants(team.logos, team.slug, league_slug)
 
             # --- Team upsert (D-03 idempotent, keyed on (league_id, slug)) ---
             async with pool.connection() as conn:
@@ -198,17 +201,20 @@ async def run(
                         """
                         INSERT INTO teams
                             (league_id, slug, display_name, abbreviation,
-                             primary_color, secondary_color, logo_url, espn_id)
+                             primary_color, secondary_color, logo_url, espn_id,
+                             logo_variants)
                         VALUES (%(league_id)s, %(slug)s, %(display_name)s,
                                 %(abbreviation)s, %(primary_color)s,
-                                %(secondary_color)s, %(logo_url)s, %(espn_id)s)
+                                %(secondary_color)s, %(logo_url)s, %(espn_id)s,
+                                %(logo_variants)s)
                         ON CONFLICT (league_id, slug) DO UPDATE SET
                             display_name    = EXCLUDED.display_name,
                             abbreviation    = EXCLUDED.abbreviation,
                             primary_color   = EXCLUDED.primary_color,
                             secondary_color = EXCLUDED.secondary_color,
                             logo_url        = EXCLUDED.logo_url,
-                            espn_id         = EXCLUDED.espn_id
+                            espn_id         = EXCLUDED.espn_id,
+                            logo_variants   = EXCLUDED.logo_variants
                         RETURNING id
                         """,
                         {
@@ -220,6 +226,7 @@ async def run(
                             "secondary_color": secondary_color,
                             "logo_url": logo_url,
                             "espn_id": team.id,
+                            "logo_variants": Jsonb(variant_map),
                         },
                     )
                     team_row = await cur.fetchone()
@@ -255,11 +262,13 @@ async def run(
                                 team_slug=team.slug,
                             )
 
-            # --- Logo bytes → Redis (D-09 / ESPN-02) ---
+            # --- Logo bytes → Redis (D-09 / D-10 / ESPN-02) ---
+            # Only the :default variant is pre-warmed; non-default variants are
+            # fetched lazily by the loader on first request (D-10).
             logo_bytes = await _resolve_logo_bytes(
                 http_client, team, semaphore, league_slug
             )
-            cache_key = f"logo:{league_slug}:{team.id}".encode()
+            cache_key = f"logo:{league_slug}:{team.id}:default".encode()
             await redis.set(cache_key, logo_bytes, ex=settings.logo_cache_ttl)
 
         await logger.ainfo(

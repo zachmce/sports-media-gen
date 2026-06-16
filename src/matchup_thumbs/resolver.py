@@ -55,7 +55,7 @@ logger = structlog.get_logger()
 _TEAM_COLUMNS = (
     "t.id, t.league_id, t.slug, t.display_name, "
     "t.abbreviation, t.primary_color, t.secondary_color, "
-    "t.logo_url, t.espn_id"
+    "t.logo_url, t.espn_id, t.logo_variants"
 )
 
 # Maximum raw input length accepted before treating as a miss (T-02-09).
@@ -169,7 +169,8 @@ async def resolve(
                or league not in KNOWN_LEAGUES.
         dict — full team row with keys:
             id, league_id, slug, display_name, abbreviation,
-            primary_color, secondary_color, logo_url, espn_id.
+            primary_color, secondary_color, logo_url, espn_id,
+            logo_variants.
 
     Both the DB-hit path AND the positive-cache-hit path return this identical
     shape (cache hit re-fetches the full row via ``_fetch_team_by_id``).

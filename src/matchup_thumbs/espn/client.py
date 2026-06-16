@@ -5,6 +5,8 @@ Provides:
 - ``fetch_teams``: GET the ESPN teams endpoint for a league and return a parsed
   ``ESPNTeamsResponse``.
 - ``select_logo_url``: choose the best logo href from an ESPN logos array.
+- ``derive_variant_key``: derive a canonical variant key from ESPN logo rel tags.
+- ``build_logo_variants``: build a full variant map from an ESPN logos array.
 - ``fetch_logo_bytes``: fetch logo bytes with semaphore, jitter, and tenacity retry.
 
 All ESPN calls go through the caller-supplied ``httpx.AsyncClient`` (shared
@@ -95,6 +97,62 @@ def select_logo_url(logos: list[ESPNLogo]) -> str | None:
             return logo.href
     # Step 3: first entry
     return logos[0].href if logos else None
+
+
+def derive_variant_key(rel: list[str]) -> str:
+    """Derive canonical variant key from ESPN logo rel tags (D-03 / LOGO-01).
+
+    Drops the generic size token ``"full"`` and joins the remaining tags sorted
+    alphabetically with ``"_"``.  An empty remainder maps to ``"default"``.
+
+    Examples::
+
+        ["full", "default"]                    -> "default"
+        ["full", "dark"]                       -> "dark"
+        ["full", "scoreboard"]                 -> "scoreboard"
+        ["full", "scoreboard", "dark"]         -> "dark_scoreboard"
+        ["full", "grayscale"]                  -> "grayscale"
+        ["full", "primary_logo_on_primary_color"] -> "primary_logo_on_primary_color"
+        ["full"]                               -> "default"  (empty remainder)
+    """
+    remaining = sorted(r for r in rel if r != "full")
+    return "_".join(remaining) if remaining else "default"
+
+
+def build_logo_variants(
+    logos: list[ESPNLogo],
+    team_slug: str,
+    league_slug: str,
+) -> dict[str, str]:
+    """Build canonical variant map from an ESPN logos array (D-03 / LOGO-01).
+
+    Iterates every logo entry, derives its canonical key via ``derive_variant_key``,
+    and stores ``key → href``.  On key collision (two logos produce the same derived
+    key) the last entry wins and a warning is logged (last-write-wins per D-03).
+
+    Args:
+        logos:       ESPN logos list from ``ESPNTeamEntry.logos``.
+        team_slug:   Team slug for collision-warning context.
+        league_slug: League slug for collision-warning context.
+
+    Returns:
+        Mapping of canonical variant key → ESPN CDN href.  Empty if ``logos`` is
+        empty (e.g. the 79 NCAAF teams with no logos).
+    """
+    variants: dict[str, str] = {}
+    for logo in logos:
+        key = derive_variant_key(logo.rel)
+        if key in variants:
+            logger.warning(
+                "logo_variant_key_collision",
+                key=key,
+                team=team_slug,
+                league=league_slug,
+                old_href=variants[key],
+                new_href=logo.href,
+            )
+        variants[key] = logo.href
+    return variants
 
 
 @tenacity.retry(

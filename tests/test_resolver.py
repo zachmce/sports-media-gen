@@ -262,6 +262,7 @@ _EXPECTED_KEYS = frozenset(
         "secondary_color",
         "logo_url",
         "espn_id",
+        "logo_variants",
     }
 )
 

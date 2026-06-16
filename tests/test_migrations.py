@@ -120,8 +120,8 @@ def test_alembic_upgrade_head() -> None:
     # The module fixture already ran upgrade; just verify the current revision.
     result = _run_alembic("current")
     assert result.returncode == 0, f"alembic current failed:\n{result.stderr}"
-    assert "0001" in result.stdout or "0001" in result.stderr, (
-        f"Expected revision 0001 to be current.\n"
+    assert "0002" in result.stdout or "0002" in result.stderr, (
+        f"Expected revision 0002 to be current.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
@@ -214,6 +214,31 @@ def test_espn_id_nullable() -> None:
 
     assert row is not None, "teams.espn_id column does not exist"
     assert row[0] == "YES", f"teams.espn_id should be nullable, is_nullable={row[0]}"
+
+
+@pg_required
+def test_logo_variants_column_exists() -> None:
+    """LOGO-01: teams.logo_variants is a JSONB column with server_default '{}'."""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+                SELECT data_type, column_default
+                FROM information_schema.columns
+                WHERE table_name = 'teams'
+                  AND column_name = 'logo_variants'
+                """
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "teams.logo_variants column does not exist"
+    data_type, column_default = row[0], row[1]
+    assert data_type == "jsonb", (
+        f"teams.logo_variants should have data_type='jsonb', got '{data_type}'"
+    )
+    assert column_default is not None and "'{}'" in column_default, (
+        f"teams.logo_variants should have server_default containing '{{}}', "
+        f"got '{column_default}'"
+    )
 
 
 @pg_required
