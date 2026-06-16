@@ -387,3 +387,106 @@ def test_settings_min_contrast_ratio_default() -> None:
     assert s.min_contrast_ratio == 3.0, (
         f"Expected Settings.min_contrast_ratio=3.0, got {s.min_contrast_ratio!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Vibrant strategy (v1.2.1): prefer the primary background + a contrasting
+# logo variant before swapping to the secondary.
+# ---------------------------------------------------------------------------
+
+
+def test_decide_crimson_primary_keeps_primary_with_white_variant() -> None:
+    """Crimson team (Alabama/Indiana) → KEEP crimson primary + white 'dark' variant.
+
+    The default (crimson) logo clashes with the crimson primary, but a white
+    ("dark") variant exists and contrasts crimson well (~5.9:1).  The vibrant
+    strategy keeps the on-brand crimson background and recolours the logo white,
+    rather than swapping to the white secondary (which produced a washed-out,
+    all-white region in the previous behaviour).
+
+    Scenario (the Alabama/Indiana case):
+    - primary_rgb: crimson #9E1B32 (== logo repr → ratio 1.0 → default logo fails)
+    - secondary_rgb: white #ffffff
+    - logo_variants: contains "dark" (the white ESPN variant)
+    - Expected: primary background, recommended_variant == "dark",
+      reason == PRIMARY_LIGHT_VARIANT, and the white-on-crimson ratio clears 3.0
+      (so the logo is NOT invisible).
+    """
+    _CRIMSON: tuple[int, int, int] = (158, 27, 50)
+    _CRIMSON_PRIMARY: tuple[int, int, int] = (158, 27, 50)
+    _WHITE_SECONDARY: tuple[int, int, int] = (255, 255, 255)
+
+    logo_variants = {
+        "default": "https://example.com/default.png",
+        "dark": "https://example.com/dark.png",
+    }
+
+    result = decide_contrast(
+        primary_rgb=_CRIMSON_PRIMARY,
+        secondary_rgb=_WHITE_SECONDARY,
+        repr_rgb=_CRIMSON,
+        logo_variants=logo_variants,
+    )
+
+    assert result.background_source == "primary", (
+        f"Expected primary background (vibrant), got {result.background_source!r}"
+    )
+    assert result.background_rgb == _CRIMSON_PRIMARY
+    assert result.recommended_variant == "dark", (
+        f"Expected the white 'dark' variant on the crimson primary, "
+        f"got {result.recommended_variant!r}"
+    )
+    assert result.reason == SelectionReason.PRIMARY_LIGHT_VARIANT, (
+        f"Expected PRIMARY_LIGHT_VARIANT, got {result.reason!r}"
+    )
+    assert result.treatment == Treatment.NONE
+    # White-on-crimson must clear the threshold — the whole point is legibility.
+    assert result.achieved_ratio == pytest.approx(
+        contrast_ratio((255, 255, 255), _CRIMSON_PRIMARY), abs=1e-4
+    )
+    assert result.achieved_ratio >= 3.0
+
+
+def test_decide_no_white_variant_still_swaps_to_light_secondary() -> None:
+    """Without a 'dark' variant, a crimson team falls back to the secondary swap.
+
+    When no white variant exists, branch 2 cannot fire, so the engine swaps to
+    the white secondary and uses the default (crimson) logo — which contrasts
+    white.  recommended_variant stays None (no variant to recommend).
+    """
+    _CRIMSON: tuple[int, int, int] = (158, 27, 50)
+    _WHITE_SECONDARY: tuple[int, int, int] = (255, 255, 255)
+
+    result = decide_contrast(
+        primary_rgb=_CRIMSON,
+        secondary_rgb=_WHITE_SECONDARY,
+        repr_rgb=_CRIMSON,
+        logo_variants={"default": "https://example.com/default.png"},  # no "dark"
+    )
+
+    assert result.background_source == "secondary"
+    assert result.background_rgb == _WHITE_SECONDARY
+    assert result.recommended_variant is None
+    assert result.reason == SelectionReason.SWAPPED_TO_SECONDARY
+
+
+# ---------------------------------------------------------------------------
+# Hotfix v1.2.1 (prong 1): _recommend_variant gate must stay luminance-aware —
+# the white 'dark' variant must never be recommended onto a LIGHT secondary
+# background (the path that produced the white-on-white invisible logo).
+# ---------------------------------------------------------------------------
+
+
+def test_recommend_variant_skips_dark_on_light_secondary() -> None:
+    """_recommend_variant returns None for the 'dark' key on a LIGHT background."""
+    from matchup_thumbs.contrast import _recommend_variant
+
+    logo_variants = {
+        "default": "https://example.com/default.png",
+        "dark": "https://example.com/dark.png",
+    }
+    # Secondary swap onto a light (white) background: 'dark' (white logo) would be
+    # invisible → must NOT be recommended.
+    assert _recommend_variant(logo_variants, "secondary", (255, 255, 255)) is None
+    # Secondary swap onto a DARK background: 'dark' (white logo) contrasts → ok.
+    assert _recommend_variant(logo_variants, "secondary", (20, 20, 20)) == "dark"

@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import io
 import uuid
+from dataclasses import replace
 from functools import partial
 from typing import NamedTuple, cast
 
@@ -50,6 +51,7 @@ from .contrast import (
     ContrastDecision,
     SelectionReason,
     Treatment,
+    contrast_ratio,
     decide_contrast,
     dominant_color,
 )
@@ -296,6 +298,111 @@ def _encode_png(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
+async def _resolve_variant_logo(
+    loaded_logo: Image.Image,
+    default_logo: Image.Image,
+    decision: ContrastDecision,
+    settings: Settings,
+    *,
+    league: str,
+    espn_id: str,
+) -> tuple[Image.Image, float]:
+    """Pick the best logo for the chosen background and return its measured contrast.
+
+    Prong 2 of the v1.2.1 hotfix and the safety net for D-03.  The contrast
+    decision is computed on the DEFAULT logo (``_decide_for_team``), but PASS 2
+    may load a DIFFERENTLY-COLOURED variant — e.g. the vibrant strategy keeps the
+    primary background and requests the ``"dark"`` variant, which is *usually* a
+    solid white logo but for some teams (Cincinnati Reds, Detroit Red Wings) is a
+    coloured logo with a thin keyline.  This re-check measures the ACTUAL loaded
+    bytes so the caller can guarantee legibility.
+
+    Returns ``(logo_to_use, achieved_ratio)`` where ``achieved_ratio`` is the
+    measured WCAG contrast of the returned logo against
+    ``decision.background_rgb``.  When a variant was requested and under-contrasts,
+    falls back to ``default_logo`` only if it contrasts better (otherwise keeps the
+    least-bad variant).  The caller escalates to an OUTLINE halo when the returned
+    ratio is still below ``settings.min_contrast_ratio``.
+
+    Re-uses already-loaded images only — no new network I/O.  ``dominant_color``
+    is CPU-bound and dispatched to the thread pool (GEN-04), matching
+    ``_decide_for_team``.
+    """
+    if decision.recommended_variant is None:
+        # No variant swap — the default logo IS the loaded logo, and the decision
+        # was computed against it, so decision.achieved_ratio is accurate.
+        return loaded_logo, decision.achieved_ratio
+    loaded_repr: tuple[int, int, int] = await anyio.to_thread.run_sync(
+        dominant_color, loaded_logo
+    )
+    loaded_ratio = contrast_ratio(loaded_repr, decision.background_rgb)
+    if loaded_ratio >= settings.min_contrast_ratio:
+        return loaded_logo, loaded_ratio
+    # The loaded variant is below the bar against the chosen background.  Fall back
+    # to the default logo ONLY if it actually contrasts better — otherwise keep the
+    # variant (least-bad).  This matters for the vibrant primary path, where the
+    # default logo is the one that clashed with the background in the first place,
+    # so a blind fallback could swap to an equally-bad or worse image.
+    default_repr: tuple[int, int, int] = await anyio.to_thread.run_sync(
+        dominant_color, default_logo
+    )
+    default_ratio = contrast_ratio(default_repr, decision.background_rgb)
+    if default_ratio <= loaded_ratio:
+        return loaded_logo, loaded_ratio
+    # Surface the fallback — no silent failure (AGENTS.md).
+    await logger.awarning(
+        "variant_contrast_recheck_fallback",
+        league=league,
+        espn_id=espn_id,
+        variant=decision.recommended_variant,
+        achieved_ratio=round(loaded_ratio, 3),
+        default_ratio=round(default_ratio, 3),
+        min_ratio=settings.min_contrast_ratio,
+        background_rgb=decision.background_rgb,
+    )
+    return default_logo, default_ratio
+
+
+async def _enforce_logo_contrast(
+    loaded_logo: Image.Image,
+    default_logo: Image.Image,
+    decision: ContrastDecision,
+    settings: Settings,
+    *,
+    league: str,
+    espn_id: str,
+) -> tuple[Image.Image, ContrastDecision]:
+    """Resolve the best logo and escalate to an OUTLINE halo when still illegible.
+
+    Wraps ``_resolve_variant_logo``: if the best available logo for the chosen
+    background still measures below ``settings.min_contrast_ratio`` (e.g. a team
+    whose ``"dark"`` variant is a coloured logo on its own primary colour), force
+    ``Treatment.OUTLINE`` so the generator draws a contrasting halo and corrects
+    the recorded ``achieved_ratio``.  Logos that already clear the bar are
+    returned with the decision untouched (no halo on crisp white-on-colour logos).
+    """
+    logo, achieved = await _resolve_variant_logo(
+        loaded_logo, default_logo, decision, settings, league=league, espn_id=espn_id
+    )
+    if (
+        achieved < settings.min_contrast_ratio
+        and decision.treatment != Treatment.OUTLINE
+    ):
+        await logger.awarning(
+            "logo_contrast_outline_escalation",
+            league=league,
+            espn_id=espn_id,
+            variant=decision.recommended_variant,
+            achieved_ratio=round(achieved, 3),
+            min_ratio=settings.min_contrast_ratio,
+            background_rgb=decision.background_rgb,
+        )
+        decision = replace(
+            decision, treatment=Treatment.OUTLINE, achieved_ratio=achieved
+        )
+    return logo, decision
+
+
 async def _render_and_encode(
     league: str,
     away: TeamDict,
@@ -345,6 +452,30 @@ async def _render_and_encode(
     )
     home_logo_final = await _load_one_logo(
         home, redis, http_client, league, settings, variant=home_variant
+    )
+
+    # PASS 2 RE-CHECK (prong 2, v1.2.1 — D-03 safety net): the contrast decision
+    # was computed on the DEFAULT logo, but the variants loaded above may be a
+    # different colour.  Re-check each loaded variant against its chosen
+    # background; fall back to the default logo if the swap would be invisible, and
+    # escalate to an OUTLINE halo when the best available logo still under-contrasts
+    # (e.g. a coloured "dark" variant on its own primary).  Re-uses already-loaded
+    # images — no new network I/O.
+    away_logo_final, away_decision = await _enforce_logo_contrast(
+        away_logo_final,
+        default_logos["away_logo"],
+        away_decision,
+        settings,
+        league=league,
+        espn_id=away["espn_id"],
+    )
+    home_logo_final, home_decision = await _enforce_logo_contrast(
+        home_logo_final,
+        default_logos["home_logo"],
+        home_decision,
+        settings,
+        league=league,
+        espn_id=home["espn_id"],
     )
 
     # Enrich DecodedAssets with both logos and decisions (D-02).
