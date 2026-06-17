@@ -232,13 +232,23 @@ async def run(
                 )
                 await redis.set(cache_key, logo_bytes, ex=settings.logo_cache_ttl)
         else:
-            # NCAA or any league with no usable logo → placeholder under :default (D-06)
-            cache_key = (
-                f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:default".encode()
-            )
-            await redis.set(
-                cache_key, get_placeholder_logo(), ex=settings.logo_cache_ttl
-            )
+            # NCAA or any league with no usable distinct logo → placeholder (D-06).
+            # Always warm :default.  Also warm :dark when advertised in variant_map
+            # so the Redis namespace is internally consistent with what Postgres
+            # logo_variants advertises (12-04 belt-and-suspenders, AGENTS.md).
+            # This keeps select_league_logo_variant("dark") from cold-missing after
+            # a DB-driven variant selection — the warm :dark key resolves to the
+            # same placeholder image as :default (idempotent, no extra ESPN fetch).
+            placeholder_bytes = get_placeholder_logo()
+            for warm_variant in {"default"} | (
+                {"dark"} if "dark" in variant_map else set()
+            ):
+                cache_key = (
+                    f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:{warm_variant}".encode()
+                )
+                await redis.set(
+                    cache_key, placeholder_bytes, ex=settings.logo_cache_ttl
+                )
 
         # --- Fetch team JSON (ESPN failure propagates → no truncate) ---
         espn_response = await fetch_teams(
