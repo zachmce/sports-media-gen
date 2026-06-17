@@ -285,11 +285,13 @@ async def run(
                     logo_bytes = get_placeholder_logo()
                 # Warm BOTH :default and :dark with the same bytes (single fetch).
                 # On failure: placeholder bytes (T-i3r-03 graceful degradation).
+                pfx = f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}"
                 for warm_variant in ("default", "dark"):
-                    cache_key = (
-                        f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:{warm_variant}".encode()
+                    await redis.set(
+                        f"{pfx}:{warm_variant}".encode(),
+                        logo_bytes,
+                        ex=settings.logo_cache_ttl,
                     )
-                    await redis.set(cache_key, logo_bytes, ex=settings.logo_cache_ttl)
             else:
                 # Unmapped not-usable league → placeholder (D-06).
                 # Always warm :default.  Also warm :dark when advertised in variant_map
@@ -299,14 +301,14 @@ async def run(
                 # a DB-driven variant selection — the warm :dark key resolves to the
                 # same placeholder image as :default (idempotent, no extra ESPN fetch).
                 placeholder_bytes = get_placeholder_logo()
+                pfx = f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}"
                 for warm_variant in {"default"} | (
                     {"dark"} if "dark" in variant_map else set()
                 ):
-                    cache_key = (
-                        f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:{warm_variant}".encode()
-                    )
                     await redis.set(
-                        cache_key, placeholder_bytes, ex=settings.logo_cache_ttl
+                        f"{pfx}:{warm_variant}".encode(),
+                        placeholder_bytes,
+                        ex=settings.logo_cache_ttl,
                     )
 
         # --- Fetch team JSON (ESPN failure propagates → no truncate) ---
@@ -517,7 +519,7 @@ def main() -> None:
     """
     try:
         asyncio.run(_amain())
-    except (SystemExit, KeyboardInterrupt):
+    except SystemExit, KeyboardInterrupt:
         raise
     except Exception as exc:
         # Log the failure and exit non-zero (ESPN-05 / D-15)

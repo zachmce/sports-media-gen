@@ -8,6 +8,22 @@
 
 An HTTP service that generates sports matchup images — thumbnails (16:9), logos, and posters (2:3) — on the fly for arbitrary team pairings across many leagues. Given `(league, away, home, kind, style)` it composites team logos and colors into an image and returns it. Outputs are deterministic and aggressively cached at every tier. All team metadata and logos come from public ESPN APIs/CDN — no paid services. It is reimplemented in Python/FastAPI, inspired by `sethwv/game-thumbs`, and intended for personal/homelab use as a public open-source repo.
 
+### Data sources
+
+**Primary:** Public ESPN APIs/CDN (`site.api.espn.com`, `sports.core.api.espn.com`, `a.espncdn.com`).
+
+**Sanctioned second public source (ncaaf/ncaab league shields only):** NCAA.com's public sportbanner CDN at
+`https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/{sport}.png`.
+ESPN returns only a generic same-URL icon for NCAA leagues (identical `default` and `dark` hrefs),
+so the ncaa.com source is used for the real per-sport shield. This is free/public — the "no paid
+services" spirit is preserved (user-approved 2026-06-17).
+
+**SSRF safety:** The sport filename is derived exclusively from `_NCAA_SPORTBANNER_SPORTS`, a
+fixed module-level mapping in `seed.py` keyed by the already KNOWN_LEAGUES-validated `league_slug`.
+No user-supplied or ESPN-supplied string ever reaches the URL — the dict lookup is the gate
+(unmapped slug → placeholder, no fetch). The base URL is the `ncaa_sportbanner_base_url`
+setting (a constant default). This satisfies T-i3r-01.
+
 **Core Value:** Given any valid `(league, away, home, kind)` request, return a correct, good-looking matchup image — and serve repeat requests from cache with near-zero app involvement.
 
 ### Constraints
