@@ -108,9 +108,12 @@ http {
         }
 
         # ── Image generation routes: cached + rate-limited ───────────────────
-        # Matches: /{league}/{away}/{home}/{kind}         (4-segment, e.g. NBA)
-        #          /{league}/{sport}/{away}/{home}/{kind} (5-segment, e.g. NCAA)
-        # kind ∈ {thumb, logo, poster} — mirrors the generator registry.
+        # Matches any kind-suffixed path: /{league}/.../{kind} (regex is intentionally
+        # permissive via .+). The API enforces the canonical 4-segment
+        # /{league}/{away}/{home}/{kind} form (e.g. /nba/..., /ncaaf/...) and 404s
+        # anything else — including the removed /ncaa/{sport}/... alias (404s are never
+        # cached, see proxy_cache_valid below). kind ∈ {thumb, logo, poster} — mirrors
+        # the generator registry.
         # NOTE: if a new kind is added to the generator registry, add it here.
         location ~ ^/[^/]+/.+/(thumb|logo|poster)$ {
             # Cache zone + key (D-04, D-05, D-06, D-07)
