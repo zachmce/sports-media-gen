@@ -120,8 +120,8 @@ def test_alembic_upgrade_head() -> None:
     # The module fixture already ran upgrade; just verify the current revision.
     result = _run_alembic("current")
     assert result.returncode == 0, f"alembic current failed:\n{result.stderr}"
-    assert "0003" in result.stdout or "0003" in result.stderr, (
-        f"Expected revision 0003 to be current.\n"
+    assert "0004" in result.stdout or "0004" in result.stderr, (
+        f"Expected revision 0004 to be current.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
