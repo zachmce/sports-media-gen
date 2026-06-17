@@ -1,18 +1,16 @@
-"""Image generation routes — 4-seg general form and 5-seg NCAA form (API-01, API-02).
+"""Image generation routes — 4-seg general form (API-01).
 
 Route hierarchy:
-  GET /ncaa/{sport}/{away}/{home}/{kind}  — NCAA multi-sport form (D-01, D-02)
   GET /{league}/{away}/{home}/{kind}      — General 4-segment form (D-01)
 
 Handler order of operations per D-05:
-  1. Map NCAA sport → canonical league slug (ncaa_image only).
-  2. Resolve away team; None → 404 team_not_found(field="away").
-  3. Resolve home team; None → 404 team_not_found(field="home").
-  4. Call render_pipeline → RenderResult(png, tier); UnknownGeneratorError propagates.
-  5. Emit per-request metrics and bind cache_tier to structlog contextvars.
-  6. Dispatch post_cache_transform via the threadpool (CPU-bound);
+  1. Resolve away team; None → 404 team_not_found(field="away").
+  2. Resolve home team; None → 404 team_not_found(field="home").
+  3. Call render_pipeline → RenderResult(png, tier); UnknownGeneratorError propagates.
+  4. Emit per-request metrics and bind cache_tier to structlog contextvars.
+  5. Dispatch post_cache_transform via the threadpool (CPU-bound);
      BadTransformParam propagates.
-  7. Return Response with CACHE_CONTROL_IMMUTABLE header.
+  6. Return Response with CACHE_CONTROL_IMMUTABLE header.
 
 Security
 --------
@@ -53,48 +51,12 @@ from matchup_thumbs.settings import settings
 
 logger = structlog.get_logger()
 
-# ---------------------------------------------------------------------------
-# NCAA sport → league slug mapping (D-02).
-# Sports absent from this map → 404 unknown_sport; no second league enum (D-03).
-# ---------------------------------------------------------------------------
-
-NCAA_SPORT_SLUGS: dict[str, str] = {
-    "football": "ncaaf",
-    "basketball": "ncaab",
-}
-
 # Upper bound for the ?fmt query value — the longest supported format ("webp")
 # is 4 chars; reject oversized input at the FastAPI validation layer (422)
 # before it reaches post_cache_transform (review WR-03).
 _FMT_MAX_LEN = 8
 
 router = APIRouter()
-
-
-# ---------------------------------------------------------------------------
-# NCAA 5-segment route  GET /ncaa/{sport}/{away}/{home}/{kind}
-# ---------------------------------------------------------------------------
-
-
-@router.get("/ncaa/{sport}/{away}/{home}/{kind}")
-async def ncaa_image(
-    sport: str,
-    away: str,
-    home: str,
-    kind: str,
-    request: Request,
-    style: Annotated[int, Query()] = 0,
-    fmt: Annotated[str, Query(max_length=_FMT_MAX_LEN)] = "png",
-    w: Annotated[int | None, Query(gt=0)] = None,
-) -> Response:
-    """NCAA multi-sport image route; maps sport to canonical league slug (API-02)."""
-    league = NCAA_SPORT_SLUGS.get(sport)
-    if league is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "unknown_sport", "sport": sport},
-        )
-    return await _handle_image(request, league, away, home, kind, style, fmt, w)
 
 
 # ---------------------------------------------------------------------------
