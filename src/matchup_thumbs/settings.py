@@ -28,10 +28,10 @@ class Settings(BaseSettings):
     # entries become unreachable and expire by their TTL — no flush needed, CACHE-07).
     # NOTE: nginx proxy_cache is NOT invalidated by this bump; its key is URL-based
     # and nginx entries expire on their own 30-day TTL (RESEARCH Pitfall 4).
-    render_version: int = 3  # v1.2.1 bump: 2 → 3 — invalidate pre-hotfix renders
-    # (light-secondary invisible-logo fix changed rendered output; bump retires
-    #  stale Redis :v2 blobs so deployed instances re-render instead of serving
-    #  the buggy cached PNGs until their 30-day TTL).
+    render_version: int = 4  # v1.3 bump: 3 → 4 — league-logo + poster seam output
+    # (VS→logo replacement on thumb/poster and GaussianBlur poster seam changed
+    #  rendered output; bump retires stale Redis :v3 blobs so deployed instances
+    #  re-render instead of serving the old VS-wordmark PNGs until their 30-day TTL).
 
     # ESPN integration
     espn_base_url: str = "https://site.api.espn.com"
