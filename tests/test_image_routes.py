@@ -225,6 +225,6 @@ def test_ncaaf_resolves_via_general_form(
 
 
 def test_old_ncaa_alias_path_gone(client: TestClient) -> None:
-    """The removed 5-seg /ncaa/{sport}/... path no longer matches any route (ROUTE-01)."""
+    """Removed 5-seg /ncaa/{sport}/... path no longer matches any route (ROUTE-01)."""
     resp = client.get("/ncaa/football/alabama/auburn/thumb")
     assert resp.status_code == 404
