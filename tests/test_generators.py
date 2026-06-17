@@ -739,9 +739,7 @@ def test_league_logo_contrast_outline_path_produces_different_render() -> None:
     img_outline = generate_thumb_style0(
         fixture_lakers(), fixture_clippers(), assets_outline
     )
-    img_none = generate_thumb_style0(
-        fixture_lakers(), fixture_clippers(), assets_none
-    )
+    img_none = generate_thumb_style0(fixture_lakers(), fixture_clippers(), assets_none)
 
     assert img_outline.tobytes() != img_none.tobytes(), (
         "Thumb with league logo OUTLINE treatment must differ from "

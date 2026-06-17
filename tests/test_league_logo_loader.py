@@ -57,12 +57,8 @@ async def test_load_league_logo_warm_key_returns_image(mock_redis):  # type: ign
     )
 
     assert result is not None, "Expected a PIL.Image on a warm Redis key, got None"
-    assert isinstance(result, Image.Image), (
-        f"Expected PIL.Image, got {type(result)}"
-    )
-    assert result.mode == "RGBA", (
-        f"Expected RGBA mode, got {result.mode}"
-    )
+    assert isinstance(result, Image.Image), f"Expected PIL.Image, got {type(result)}"
+    assert result.mode == "RGBA", f"Expected RGBA mode, got {result.mode}"
 
 
 async def test_load_league_logo_cold_key_returns_none(mock_redis):  # type: ignore[no-untyped-def]
@@ -76,9 +72,7 @@ async def test_load_league_logo_cold_key_returns_none(mock_redis):  # type: igno
         settings=Settings(),
     )
 
-    assert result is None, (
-        f"Expected None on a cold Redis key, got {type(result)}"
-    )
+    assert result is None, f"Expected None on a cold Redis key, got {type(result)}"
 
 
 async def test_load_league_logo_corrupted_bytes_returns_none(mock_redis):  # type: ignore[no-untyped-def]
@@ -139,12 +133,8 @@ async def test_load_league_logo_cold_variant_warm_default_returns_image(mock_red
     assert result is not None, (
         "Expected a PIL.Image when :dark is cold but :default is warm (NCAA regression)"
     )
-    assert isinstance(result, Image.Image), (
-        f"Expected PIL.Image, got {type(result)}"
-    )
-    assert result.mode == "RGBA", (
-        f"Expected RGBA mode, got {result.mode}"
-    )
+    assert isinstance(result, Image.Image), f"Expected PIL.Image, got {type(result)}"
+    assert result.mode == "RGBA", f"Expected RGBA mode, got {result.mode}"
 
 
 async def test_load_league_logo_no_variant_warmed_returns_none(mock_redis):  # type: ignore[no-untyped-def]

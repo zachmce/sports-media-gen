@@ -718,7 +718,9 @@ async def test_has_usable_league_logo_identical_hrefs_returns_false() -> None:
     """_has_usable_league_logo: identical hrefs → False (NCAA case, D-06)."""
     from matchup_thumbs.seed import _has_usable_league_logo
 
-    identical_href = "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
+    identical_href = (
+        "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
+    )
     variant_map = {"default": identical_href, "dark": identical_href}
     assert _has_usable_league_logo(variant_map) is False
 
@@ -747,10 +749,14 @@ async def test_seed_league_logo_pro_league_warms_both_keys(
     path, limit = LEAGUE_ENDPOINTS[league_slug]
     sport, espn_league_slug = path.split("/", 1)
     core_url = f"{core_api_base_url}/v2/sports/{sport}/leagues/{espn_league_slug}"
-    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+    site_url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+    )
 
     default_href = "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png"
-    dark_href = "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500-dark/nba.png"
+    dark_href = (
+        "https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500-dark/nba.png"
+    )
 
     # Mock httpx — responds to core API and site API; returns PNG bytes for logo fetches
     def _make_tiny_png() -> bytes:
@@ -870,9 +876,13 @@ async def test_seed_league_logo_ncaa_warms_sportbanner_both_keys(
     path, limit = LEAGUE_ENDPOINTS[league_slug]
     sport_key, espn_league_slug = path.split("/", 1)
     core_url = f"{core_api_base_url}/v2/sports/{sport_key}/leagues/{espn_league_slug}"
-    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+    site_url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+    )
 
-    identical_href = "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
+    identical_href = (
+        "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
+    )
 
     # Build the expected ncaa.com sportbanner URL
     sport_filename = _NCAA_SPORTBANNER_SPORTS[league_slug]
@@ -886,9 +896,7 @@ async def test_seed_league_logo_ncaa_warms_sportbanner_both_keys(
 
     tiny_png = _make_tiny_png()
 
-    espn_teams_fixture: dict[str, Any] = {
-        "sports": [{"leagues": [{"teams": []}]}]
-    }
+    espn_teams_fixture: dict[str, Any] = {"sports": [{"leagues": [{"teams": []}]}]}
 
     def mock_http_handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -979,9 +987,7 @@ async def test_seed_league_logo_ncaa_warms_sportbanner_both_keys(
     assert update_params["slug"] == league_slug
     variants_arg = update_params["logo_variants"]
     # Jsonb wraps the dict — compare .obj attribute or the dict itself
-    variants_dict = (
-        variants_arg.obj if hasattr(variants_arg, "obj") else variants_arg
-    )
+    variants_dict = variants_arg.obj if hasattr(variants_arg, "obj") else variants_arg
     assert variants_dict == {"default": ncaa_url, "dark": ncaa_url}, (
         f"logo_variants must be {{default: url, dark: url}}, got {variants_dict}"
     )
@@ -1018,12 +1024,12 @@ async def test_seed_ncaa_like_league_warms_sportbanner_both_keys(
     path, limit = LEAGUE_ENDPOINTS[league_slug]
     sport_key, espn_league_slug = path.split("/", 1)
     core_url = f"{core_api_base_url}/v2/sports/{sport_key}/leagues/{espn_league_slug}"
-    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+    site_url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+    )
 
     # NCAA placeholder: both hrefs identical → _has_usable_league_logo returns False
-    identical_href = (
-        "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-basketball-college.png"
-    )
+    identical_href = "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-basketball-college.png"
 
     # Build the expected ncaa.com sportbanner URL for basketball
     sport_filename = _NCAA_SPORTBANNER_SPORTS[league_slug]
@@ -1037,9 +1043,7 @@ async def test_seed_ncaa_like_league_warms_sportbanner_both_keys(
 
     tiny_png = _make_tiny_png()
 
-    espn_teams_fixture: dict[str, Any] = {
-        "sports": [{"leagues": [{"teams": []}]}]
-    }
+    espn_teams_fixture: dict[str, Any] = {"sports": [{"leagues": [{"teams": []}]}]}
 
     def mock_http_handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -1128,9 +1132,7 @@ async def test_seed_ncaa_like_league_warms_sportbanner_both_keys(
     update_params = update_params_list[0]
     assert update_params["slug"] == league_slug
     variants_arg = update_params["logo_variants"]
-    variants_dict = (
-        variants_arg.obj if hasattr(variants_arg, "obj") else variants_arg
-    )
+    variants_dict = variants_arg.obj if hasattr(variants_arg, "obj") else variants_arg
     assert variants_dict == {"default": ncaa_url, "dark": ncaa_url}, (
         f"logo_variants must be {{default: url, dark: url}}, got {variants_dict}"
     )
@@ -1161,7 +1163,9 @@ async def test_seed_ncaa_sportbanner_fetch_failure_falls_back_to_placeholder(
     path, limit = LEAGUE_ENDPOINTS[league_slug]
     sport_key, espn_league_slug = path.split("/", 1)
     core_url = f"{core_api_base_url}/v2/sports/{sport_key}/leagues/{espn_league_slug}"
-    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+    site_url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+    )
 
     identical_href = (
         "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
@@ -1170,9 +1174,7 @@ async def test_seed_ncaa_sportbanner_fetch_failure_falls_back_to_placeholder(
     sport_filename = _NCAA_SPORTBANNER_SPORTS[league_slug]
     ncaa_url = f"{settings.ncaa_sportbanner_base_url}/{sport_filename}.png"
 
-    espn_teams_fixture: dict[str, Any] = {
-        "sports": [{"leagues": [{"teams": []}]}]
-    }
+    espn_teams_fixture: dict[str, Any] = {"sports": [{"leagues": [{"teams": []}]}]}
 
     def mock_http_handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
