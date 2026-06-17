@@ -7,7 +7,7 @@ Versions correspond to annotated git tags (`v1.X.Y`) and GitHub Releases.
 
 ---
 
-## [Unreleased]
+## [1.3.0] — 2026-06-17
 
 ### Breaking Changes
 
@@ -27,10 +27,6 @@ homelab service and a clean break was chosen over a deprecation shim per ROUTE-0
 `ncaaf` and `ncaab` have always been members of `KNOWN_LEAGUES` and resolve via the
 general 4-segment route `GET /{league}/{away}/{home}/{kind}` — no other change to
 resolution, caching, or rate-limiting behavior.
-
----
-
-## [1.3.0] — 2026-06-17
 
 ### Added
 
