@@ -12,7 +12,7 @@ NULL colours fall back to named grey constants (D-15).
 
 from __future__ import annotations
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 from ..assets import _load_font
 from ..contrast import Treatment
@@ -35,6 +35,8 @@ _BAND_H: int = _POSTER_H // 2  # 600px each band
 _LOGO_SIZE: int = 320  # each logo resized to this square within its band
 _VS_FONT_SIZE: int = 120  # BarlowCondensed-Bold pixel size for "VS"
 _VS_STROKE_WIDTH: int = 5  # black outline around VS wordmark
+_BLUR_RADIUS: int = 40  # GaussianBlur radius for horizontal seam blend (D-08, PST-01)
+_LEAGUE_LOGO_BOX: int = 200  # contain-fit bounding box for league logo (D-02/D-03)
 
 
 # ---------------------------------------------------------------------------
@@ -59,10 +61,19 @@ def generate_poster_style0(
     away_rgb = assets["away_decision"].background_rgb
     home_rgb = assets["home_decision"].background_rgb
 
-    # --- Vertical split background ---
-    bg = Image.new("RGB", (_POSTER_W, _POSTER_H), away_rgb)
-    home_band = Image.new("RGB", (_POSTER_W, _BAND_H), home_rgb)
-    bg.paste(home_band, (0, _BAND_H))
+    # --- Horizontal split background via GaussianBlur mask (PST-01, D-07) ---
+    # Mirrors thumb.py diagonal pattern; horizontal mask = full-width bottom band.
+    # Away colour fills entire canvas; home colour fills the lower half.
+    # Blurred rectangle mask produces a soft gradient at the seam (no hard cut).
+    base = Image.new("RGB", (_POSTER_W, _POSTER_H), away_rgb)
+    overlay = Image.new("RGB", (_POSTER_W, _POSTER_H), home_rgb)
+    mask = Image.new("L", (_POSTER_W, _POSTER_H), 0)
+    ImageDraw.Draw(mask).rectangle(
+        [(0, _BAND_H), (_POSTER_W, _POSTER_H)],
+        fill=255,
+    )
+    soft_mask = mask.filter(ImageFilter.GaussianBlur(radius=_BLUR_RADIUS))
+    bg = Image.composite(overlay, base, soft_mask)
 
     # --- Logo placement ---
     # Away logo: centred in upper band  (D-06: away first/top)
@@ -83,17 +94,40 @@ def generate_poster_style0(
         cx = _POSTER_W // 2
         bg.paste(logo_rgba, (cx - _LOGO_SIZE // 2, cy - _LOGO_SIZE // 2), logo_rgba)
 
-    # --- "VS" wordmark at the horizontal seam (D-08: VS only, no team names) ---
-    draw = ImageDraw.Draw(bg)
-    font = _load_font(_VS_FONT_SIZE)
-    draw.text(
-        (_POSTER_W // 2, _BAND_H),
-        "VS",
-        fill="white",
-        font=font,
-        anchor="mm",
-        stroke_width=_VS_STROKE_WIDTH,
-        stroke_fill=(0, 0, 0),
-    )
+    # --- League logo or VS wordmark fallback (D-09, BRAND-02/BRAND-04) ---
+    if assets["league_logo"] is not None:
+        # Aspect-preserving contain-fit (D-02).
+        # thumbnail() mutates in-place — always copy first (Pitfall 3).
+        league_logo_copy = assets["league_logo"].copy()
+        league_logo_copy.thumbnail(
+            (_LEAGUE_LOGO_BOX, _LEAGUE_LOGO_BOX), Image.Resampling.LANCZOS
+        )
+        lw, lh = league_logo_copy.size
+        # Apply OUTLINE halo when directed by contrast decision (D-04, BRAND-03).
+        # Read background_rgb from league_decision — not directly from seam (Pitfall 2).
+        if (
+            assets["league_decision"] is not None
+            and assets["league_decision"].treatment == Treatment.OUTLINE
+        ):
+            league_logo_copy = _apply_outline(
+                league_logo_copy, assets["league_decision"].background_rgb
+            )
+        # Dead-center placement (D-02): cx = W/2 = 400, cy = H/2 = 600 (seam midpoint).
+        cx = _POSTER_W // 2  # 400
+        cy = _POSTER_H // 2  # 600
+        bg.paste(league_logo_copy, (cx - lw // 2, cy - lh // 2), league_logo_copy)
+    else:
+        # VS wordmark fallback — preserved as future ad-hoc-text seam (BRAND-04)
+        draw = ImageDraw.Draw(bg)
+        font = _load_font(_VS_FONT_SIZE)
+        draw.text(
+            (_POSTER_W // 2, _BAND_H),
+            "VS",
+            fill="white",
+            font=font,
+            anchor="mm",
+            stroke_width=_VS_STROKE_WIDTH,
+            stroke_fill=(0, 0, 0),
+        )
 
     return bg
