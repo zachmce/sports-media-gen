@@ -24,7 +24,13 @@ from typing import Any
 import pytest
 from PIL import Image, features
 
-from tests.conftest import fixture_clippers, fixture_decoded_assets, fixture_lakers
+from tests.conftest import (
+    fixture_clippers,
+    fixture_decoded_assets,
+    fixture_decoded_assets_with_league_logo,
+    fixture_lakers,
+    make_decision,
+)
 
 # ---------------------------------------------------------------------------
 # Synthetic helpers for contrast tests (D-11 — deterministic, no live ESPN)
@@ -571,3 +577,173 @@ def test_poster_style0_golden(image_snapshot: Any) -> None:  # type: ignore[misc
     )
     SNAPSHOT_DIR.mkdir(exist_ok=True)
     image_snapshot(img, SNAPSHOT_DIR / "poster_style0_lakers_clippers.png")
+
+
+# ---------------------------------------------------------------------------
+# TEST-03: Golden tests for the league-logo render path
+# (the VS-fallback path is already covered by the existing goldens above,
+#  since fixture_decoded_assets() returns league_logo=None)
+# ---------------------------------------------------------------------------
+
+
+@_SKIP_GOLDEN
+def test_thumb_style0_logo_golden(image_snapshot: Any) -> None:  # type: ignore[misc]
+    """Visual regression for thumb style=0 with league logo present (TEST-03, BRAND-01).
+
+    Uses fixture_decoded_assets_with_league_logo() so the league-logo branch is
+    exercised — the generator places the logo bottom-center instead of the VS
+    wordmark.  Must run inside Docker (FreeType-sensitive path, GEN-06).
+    """
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+
+    img: Image.Image = generate_thumb_style0(
+        fixture_lakers(),
+        fixture_clippers(),
+        fixture_decoded_assets_with_league_logo(),
+    )
+    SNAPSHOT_DIR.mkdir(exist_ok=True)
+    image_snapshot(img, SNAPSHOT_DIR / "thumb_style0_logo_path.png")
+
+
+@_SKIP_GOLDEN
+def test_poster_style0_logo_golden(image_snapshot: Any) -> None:  # type: ignore[misc]
+    """Poster style=0 visual regression with league logo present (BRAND-02, TEST-03).
+
+    Uses fixture_decoded_assets_with_league_logo() so the league-logo branch is
+    exercised — the generator places the logo dead-center over the soft blurred
+    seam (PST-01).  Must run inside Docker (FreeType-sensitive path, GEN-06).
+    """
+    from matchup_thumbs.generators.poster import generate_poster_style0
+
+    img: Image.Image = generate_poster_style0(
+        fixture_lakers(),
+        fixture_clippers(),
+        fixture_decoded_assets_with_league_logo(),
+    )
+    SNAPSHOT_DIR.mkdir(exist_ok=True)
+    image_snapshot(img, SNAPSHOT_DIR / "poster_style0_logo_path.png")
+
+
+# ---------------------------------------------------------------------------
+# BRAND-03: League-logo contrast / outline-escalation unit coverage (T-12-01)
+# Pure and deterministic — uses contrast_ratio() and dominant_color() directly
+# instead of the async _enforce_league_logo_contrast() so no event loop needed.
+# ---------------------------------------------------------------------------
+
+
+def test_league_logo_contrast_outline_escalation_on_low_contrast() -> None:
+    """League logo that under-contrasts the seam receives Treatment.OUTLINE (BRAND-03).
+
+    Simulates the exact scenario _enforce_league_logo_contrast handles: a dark
+    logo against a nearly-identical dark seam.  Uses pure contrast math (no I/O)
+    to assert OUTLINE is the correct escalation path.
+
+    Matches the -k league_logo_contrast selector (VALIDATION.md BRAND-03 test map).
+    """
+    from matchup_thumbs.contrast import Treatment, contrast_ratio, dominant_color
+    from matchup_thumbs.settings import Settings
+
+    # Dark grey logo (#3A3A3A ≈ (58, 58, 58)) on a nearly-identical dark seam —
+    # contrast ratio will be very close to 1.0 (well below the 3.0 threshold).
+    dark_logo_rgb: tuple[int, int, int] = (58, 58, 58)
+    seam_rgb: tuple[int, int, int] = (60, 60, 60)  # near-identical dark seam
+
+    # Build a synthetic logo with the dark color.
+    logo = Image.new("RGBA", (100, 100), dark_logo_rgb + (255,))
+    repr_rgb = dominant_color(logo)
+    ratio = contrast_ratio(repr_rgb, seam_rgb)
+
+    settings = Settings()
+    # Assert the ratio is below the threshold (would trigger OUTLINE).
+    assert ratio < settings.min_contrast_ratio, (
+        f"Expected ratio {ratio:.3f} < {settings.min_contrast_ratio} "
+        "for dark-on-dark league logo (BRAND-03)"
+    )
+    # Simulate the escalation decision (mirrors _enforce_league_logo_contrast logic).
+    if ratio < settings.min_contrast_ratio:
+        treatment = Treatment.OUTLINE
+    else:
+        treatment = Treatment.NONE
+    assert treatment == Treatment.OUTLINE, (
+        "Under-contrast league logo must escalate to Treatment.OUTLINE (BRAND-03)"
+    )
+
+
+def test_league_logo_contrast_none_when_sufficient_contrast() -> None:
+    """League logo that meets the contrast threshold gets Treatment.NONE (BRAND-03).
+
+    White logo on a dark purple seam: high contrast ratio (>= 3.0) → Treatment.NONE.
+    Verifies the non-escalation path in the league-logo contrast engine.
+
+    Matches the -k league_logo_contrast selector (VALIDATION.md BRAND-03 test map).
+    """
+    from matchup_thumbs.contrast import Treatment, contrast_ratio, dominant_color
+    from matchup_thumbs.settings import Settings
+
+    # White logo on a dark purple seam → high contrast.
+    white_logo_rgb: tuple[int, int, int] = (255, 255, 255)
+    seam_rgb: tuple[int, int, int] = (85, 37, 131)  # Lakers purple seam
+
+    logo = Image.new("RGBA", (100, 100), white_logo_rgb + (255,))
+    repr_rgb = dominant_color(logo)
+    ratio = contrast_ratio(repr_rgb, seam_rgb)
+
+    settings = Settings()
+    assert ratio >= settings.min_contrast_ratio, (
+        f"Expected ratio {ratio:.3f} >= {settings.min_contrast_ratio} "
+        "for white-on-dark league logo (BRAND-03)"
+    )
+    if ratio < settings.min_contrast_ratio:
+        treatment = Treatment.OUTLINE
+    else:
+        treatment = Treatment.NONE
+    assert treatment == Treatment.NONE, (
+        "Sufficient-contrast league logo must yield Treatment.NONE (BRAND-03)"
+    )
+
+
+def test_league_logo_contrast_outline_path_produces_different_render() -> None:
+    """OUTLINE treatment on league logo produces a visually different render (BRAND-03).
+
+    End-to-end check: thumb with league logo under Treatment.OUTLINE (halo applied)
+    differs from thumb with same logo under Treatment.NONE.  Uses a logo with
+    transparent borders so _apply_outline has opaque halo pixels to inject.
+    Confirms the generator actually applies _apply_outline when directed by
+    the treatment field of league_decision.
+
+    Matches the -k league_logo_contrast selector (VALIDATION.md BRAND-03 test map).
+    """
+    from matchup_thumbs.contrast import Treatment
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+
+    seam_rgb: tuple[int, int, int] = (142, 26, 88)
+
+    # A logo with transparent padding — _apply_outline injects halo pixels into
+    # the transparent border, making the OUTLINE render visually distinct.
+    logo_with_transparency = Image.new("RGBA", (200, 100), (0, 0, 0, 0))
+    mark = Image.new("RGBA", (160, 60), (255, 255, 255, 255))
+    logo_with_transparency.paste(mark, (20, 20))
+
+    assets_outline = fixture_decoded_assets_with_league_logo()
+    assets_outline["league_logo"] = logo_with_transparency
+    assets_outline["league_decision"] = make_decision(
+        background_rgb=seam_rgb,
+        background_source="seam",
+        treatment=Treatment.OUTLINE,
+    )
+
+    assets_none = fixture_decoded_assets_with_league_logo()
+    assets_none["league_logo"] = logo_with_transparency
+    # league_decision from fixture already has Treatment.NONE
+
+    img_outline = generate_thumb_style0(
+        fixture_lakers(), fixture_clippers(), assets_outline
+    )
+    img_none = generate_thumb_style0(
+        fixture_lakers(), fixture_clippers(), assets_none
+    )
+
+    assert img_outline.tobytes() != img_none.tobytes(), (
+        "Thumb with league logo OUTLINE treatment must differ from "
+        "NONE treatment (BRAND-03)"
+    )

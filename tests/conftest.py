@@ -238,6 +238,40 @@ def fixture_decoded_assets() -> DecodedAssets:
     )
 
 
+def _make_synthetic_league_logo() -> Image.Image:
+    """Return a wide RGBA wordmark-shaped image (2:1 aspect) for fixture use.
+
+    The 200×100 size exercises the aspect-preserving contain-fit in the
+    generators (_LEAGUE_LOGO_BOX × _LEAGUE_LOGO_BOX bounding box).  Solid
+    white fill simulates a light wordmark against a coloured seam.
+    """
+    return Image.new("RGBA", (200, 100), (255, 255, 255, 255))
+
+
+def fixture_decoded_assets_with_league_logo() -> DecodedAssets:
+    """Return a DecodedAssets dict with a synthetic league logo for logo-path tests.
+
+    Builds on fixture_decoded_assets() (league_logo=None / league_decision=None)
+    and injects a wide white wordmark plus a seam-referenced ContrastDecision.
+    The existing fixture_decoded_assets() is NOT modified (Pitfall 1 — modifying
+    the base fixture would break all VS-fallback golden comparisons).
+
+    The seam_rgb (142, 26, 88) is the 50/50 blend of:
+      Lakers purple (85, 37, 131) and Clippers red (200, 16, 46),
+    matching the value _blend_seam_color() would compute at render time.
+    Treatment.NONE: the white logo has sufficient contrast on the purple-red seam.
+    """
+    assets = fixture_decoded_assets()
+    seam_rgb: tuple[int, int, int] = (142, 26, 88)  # mid-blend of Lakers/Clippers
+    assets["league_logo"] = _make_synthetic_league_logo()
+    assets["league_decision"] = make_decision(
+        background_rgb=seam_rgb,
+        background_source="seam",
+        treatment=Treatment.NONE,
+    )
+    return assets
+
+
 @pytest.fixture
 def espn_nba_fixture() -> dict[str, Any]:
     """Load and return the recorded ESPN NBA teams response dict.
