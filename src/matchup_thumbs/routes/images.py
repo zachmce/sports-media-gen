@@ -189,7 +189,7 @@ async def _handle_image(
     # (5) Render pipeline — may raise UnknownGeneratorError (handled in main.py).
     t0 = time.perf_counter()
     result: RenderResult = await render_pipeline(
-        league, away, home, kind, style, redis, http_client, settings
+        league, away, home, kind, style, redis, http_client, settings, pool
     )
     elapsed = time.perf_counter() - t0
 
