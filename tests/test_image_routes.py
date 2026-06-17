@@ -1,4 +1,4 @@
-"""Image route tests — API-01 (4-seg) and API-02 (5-seg NCAA form).
+"""Image route tests — API-01 (4-seg general form).
 
 Mocks:
   - ``matchup_thumbs.routes.images.resolve`` — controls away/home resolution outcomes
@@ -197,12 +197,14 @@ def test_width_clamp_route(client: TestClient, hit_result: RenderResult) -> None
 
 
 # ---------------------------------------------------------------------------
-# API-02: NCAA 5-segment form
+# NCAA via general form (post-alias-removal)
 # ---------------------------------------------------------------------------
 
 
-def test_ncaa_sport_mapping(client: TestClient, hit_result: RenderResult) -> None:
-    """GET /ncaa/football/... maps sport to ncaaf league slug (API-02)."""
+def test_ncaaf_resolves_via_general_form(
+    client: TestClient, hit_result: RenderResult
+) -> None:
+    """ncaaf resolves via the 4-seg general route after alias removal (ROUTE-01)."""
     away = _team("alabama", "ncaaf")
     home = _team("auburn", "ncaaf")
     resolve_mock = AsyncMock(side_effect=[away, home])
@@ -216,18 +218,13 @@ def test_ncaa_sport_mapping(client: TestClient, hit_result: RenderResult) -> Non
             new=AsyncMock(return_value=hit_result),
         ),
     ):
-        resp = client.get("/ncaa/football/alabama/auburn/thumb")
+        resp = client.get("/ncaaf/alabama/auburn/thumb")
 
     assert resp.status_code == 200
-    # Assert resolve was called with "ncaaf" (not "football")
-    first_call_args = resolve_mock.call_args_list[0]
-    assert first_call_args[0][0] == "ncaaf"
+    assert resolve_mock.call_args_list[0][0][0] == "ncaaf"
 
 
-def test_unknown_ncaa_sport_404(client: TestClient) -> None:
-    """Unknown NCAA sport returns 404 with unknown_sport error (API-02)."""
-    resp = client.get("/ncaa/rugby/alabama/auburn/thumb")
+def test_old_ncaa_alias_path_gone(client: TestClient) -> None:
+    """The removed 5-seg /ncaa/{sport}/... path no longer matches any route (ROUTE-01)."""
+    resp = client.get("/ncaa/football/alabama/auburn/thumb")
     assert resp.status_code == 404
-    body = resp.json()
-    assert body["detail"]["error"] == "unknown_sport"
-    assert body["detail"]["sport"] == "rugby"
