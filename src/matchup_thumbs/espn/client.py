@@ -42,6 +42,60 @@ LEAGUE_ENDPOINTS: Final[dict[str, tuple[str, int]]] = {
 }
 
 
+async def fetch_league_logo_data(
+    client: httpx.AsyncClient,
+    core_api_base_url: str,
+    league_slug: str,
+) -> list[ESPNLogo]:
+    """Fetch the logos array from the ESPN core API league endpoint (LGL-01).
+
+    URL: ``{core_api_base_url}/v2/sports/{sport}/leagues/{espn_league_slug}``
+
+    The logos array is embedded inline in the root response (no ``$ref`` follow
+    needed — the league root object includes ``logos`` directly). [VERIFIED: live probe]
+
+    SSRF gate (T-11-01): the slug is validated against KNOWN_LEAGUES in the
+    seed ``run()`` entry point before this function is called.  The
+    ``LEAGUE_ENDPOINTS[league_slug]`` lookup additionally constrains the URL
+    path to the known set — a ``KeyError`` is raised for any unknown slug.
+    The URL is never constructed from a raw/unvalidated string.
+
+    Args:
+        client:             Shared ``httpx.AsyncClient`` (caller-supplied).
+        core_api_base_url:  ESPN core API base URL
+                            (``settings.espn_core_api_base_url``).
+                            DISTINCT from ``espn_base_url`` (site.api.espn.com).
+        league_slug:        One of the six supported slugs (``nba``, ``nfl``, …).
+                            Must be a key in ``LEAGUE_ENDPOINTS``.
+
+    Returns:
+        Parsed ``list[ESPNLogo]`` from the inline ``logos`` array; empty list on
+        any HTTP error so a single league failure never aborts the entire seed.
+
+    Raises:
+        KeyError: if ``league_slug`` is not in ``LEAGUE_ENDPOINTS`` (SSRF gate).
+    """
+    # KeyError on unknown slug (SSRF gate — never build URL before this lookup)
+    path, _ = LEAGUE_ENDPOINTS[league_slug]
+    sport, espn_league_slug = path.split("/", 1)
+    url = f"{core_api_base_url}/v2/sports/{sport}/leagues/{espn_league_slug}"
+    await logger.adebug("espn_fetch_league_logo", league=league_slug, url=url)
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        await logger.aerror(
+            "league_logo_fetch_failed",
+            league=league_slug,
+            url=url,
+            status_code=exc.response.status_code,
+        )
+        return []
+    data: dict[str, object] = response.json()
+    raw_logos: list[object] = data.get("logos", [])  # type: ignore[assignment]
+    return [ESPNLogo.model_validate(logo) for logo in raw_logos]
+
+
 async def fetch_teams(
     client: httpx.AsyncClient,
     base_url: str,

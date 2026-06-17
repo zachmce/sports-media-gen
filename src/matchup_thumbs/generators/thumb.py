@@ -39,6 +39,8 @@ _LOGO_SIZE: int = 280  # each logo resized to this square
 _BLUR_RADIUS: int = 40  # GaussianBlur radius for diagonal seam blend
 _VS_FONT_SIZE: int = 144  # BarlowCondensed-Bold pixel size for "VS"
 _VS_STROKE_WIDTH: int = 5  # black outline around VS wordmark
+_LEAGUE_LOGO_BOX: int = 160  # contain-fit bounding box for league logo (D-01/D-03)
+_LEAGUE_LOGO_MARGIN: int = 32  # gap from bottom canvas edge to logo bottom (D-01/D-03)
 
 
 # ---------------------------------------------------------------------------
@@ -95,17 +97,40 @@ def generate_thumb_style0(
             logo_rgba = _apply_outline(logo_rgba, decision.background_rgb)
         bg.paste(logo_rgba, (cx - _LOGO_SIZE // 2, cy - _LOGO_SIZE // 2), logo_rgba)
 
-    # --- "VS" wordmark (D-08: VS only, no team names) ---
-    draw = ImageDraw.Draw(bg)
-    font = _load_font(_VS_FONT_SIZE)
-    draw.text(
-        (_THUMB_W // 2, _THUMB_H // 2),
-        "VS",
-        fill="white",
-        font=font,
-        anchor="mm",
-        stroke_width=_VS_STROKE_WIDTH,
-        stroke_fill=(0, 0, 0),
-    )
+    # --- League logo or VS wordmark fallback (D-09, BRAND-01/BRAND-04) ---
+    if assets["league_logo"] is not None:
+        # Aspect-preserving contain-fit (D-01).
+        # thumbnail() mutates in-place — always copy first (Pitfall 3).
+        league_logo_copy = assets["league_logo"].copy()
+        league_logo_copy.thumbnail(
+            (_LEAGUE_LOGO_BOX, _LEAGUE_LOGO_BOX), Image.Resampling.LANCZOS
+        )
+        lw, lh = league_logo_copy.size
+        # Apply OUTLINE halo when directed by contrast decision (D-04, BRAND-03).
+        # Read background_rgb from league_decision — not directly from seam (Pitfall 2).
+        if (
+            assets["league_decision"] is not None
+            and assets["league_decision"].treatment == Treatment.OUTLINE
+        ):
+            league_logo_copy = _apply_outline(
+                league_logo_copy, assets["league_decision"].background_rgb
+            )
+        # Bottom-center placement (D-01): horizontally centered, bottom-anchored.
+        cx = _THUMB_W // 2
+        cy = _THUMB_H - _LEAGUE_LOGO_MARGIN - lh // 2
+        bg.paste(league_logo_copy, (cx - lw // 2, cy - lh // 2), league_logo_copy)
+    else:
+        # VS wordmark fallback — preserved as future ad-hoc-text seam (BRAND-04)
+        draw = ImageDraw.Draw(bg)
+        font = _load_font(_VS_FONT_SIZE)
+        draw.text(
+            (_THUMB_W // 2, _THUMB_H // 2),
+            "VS",
+            fill="white",
+            font=font,
+            anchor="mm",
+            stroke_width=_VS_STROKE_WIDTH,
+            stroke_fill=(0, 0, 0),
+        )
 
     return bg

@@ -38,15 +38,17 @@ import io
 import uuid
 from dataclasses import replace
 from functools import partial
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import anyio
 import httpx
 import structlog
 from PIL import Image
+from psycopg import rows as pg_rows
+from psycopg_pool import AsyncConnectionPool
 from redis.asyncio import Redis  # bare Redis — not generic at runtime
 
-from .assets.loader import _load_one_logo, load_assets
+from .assets.loader import _load_one_logo, load_assets, load_league_logo
 from .contrast import (
     ContrastDecision,
     SelectionReason,
@@ -54,6 +56,7 @@ from .contrast import (
     contrast_ratio,
     decide_contrast,
     dominant_color,
+    select_league_logo_variant,
 )
 from .generators import get_generator
 from .generators._color import NULL_PRIMARY, NULL_SECONDARY, hex_to_rgb
@@ -403,6 +406,73 @@ async def _enforce_logo_contrast(
     return logo, decision
 
 
+def _blend_seam_color(
+    away_rgb: tuple[int, int, int],
+    home_rgb: tuple[int, int, int],
+) -> tuple[int, int, int]:
+    """Return the 50/50 per-channel average of away and home background colours.
+
+    Used as the seam reference colour for league-logo variant selection (D-09).
+    A simple average is sufficient for the WCAG luminance gate — Phase 12 can
+    refine this if a weighted blend is needed.
+
+    Pure function — no I/O.
+    """
+    return (
+        (away_rgb[0] + home_rgb[0]) // 2,
+        (away_rgb[1] + home_rgb[1]) // 2,
+        (away_rgb[2] + home_rgb[2]) // 2,
+    )
+
+
+async def _enforce_league_logo_contrast(
+    league_logo: Image.Image,
+    seam_rgb: tuple[int, int, int],
+    league_variant: str,
+    settings: Settings,
+    *,
+    league: str,
+) -> ContrastDecision:
+    """Compute contrast decision for the league logo against the seam color.
+
+    Mirrors _enforce_logo_contrast but for the league logo (D-05, BRAND-03):
+    - Uses seam_rgb (not a team background) as the reference.
+    - No default/variant swap needed (variant already selected by
+      select_league_logo_variant before load).
+    - Escalates to Treatment.OUTLINE when measured contrast is below threshold.
+
+    background_source is recorded as ``"seam"`` to distinguish this decision
+    from per-team decisions (background_source ``"primary"`` / ``"secondary"``).
+    """
+    repr_rgb: tuple[int, int, int] = await anyio.to_thread.run_sync(
+        dominant_color, league_logo
+    )
+    achieved = contrast_ratio(repr_rgb, seam_rgb)
+    treatment = Treatment.NONE
+    if achieved < settings.min_contrast_ratio:
+        await logger.awarning(
+            "league_logo_contrast_outline_escalation",
+            league=league,
+            variant=league_variant,
+            achieved_ratio=round(achieved, 3),
+            min_ratio=settings.min_contrast_ratio,
+            seam_rgb=seam_rgb,
+        )
+        treatment = Treatment.OUTLINE
+    return ContrastDecision(
+        background_rgb=seam_rgb,
+        background_source="seam",
+        achieved_ratio=achieved,
+        recommended_variant=league_variant,
+        treatment=treatment,
+        reason=(
+            SelectionReason.PRIMARY_OK
+            if treatment == Treatment.NONE
+            else SelectionReason.TREATMENT_REQUIRED
+        ),
+    )
+
+
 async def _render_and_encode(
     league: str,
     away: TeamDict,
@@ -412,6 +482,7 @@ async def _render_and_encode(
     redis: Redis,
     http_client: httpx.AsyncClient,
     settings: Settings,
+    pool: AsyncConnectionPool[Any],  # NEW — D-06 requires DB fetch at render time
 ) -> bytes:
     """Two-pass per-team contrast orchestration → generator dispatch → PNG bytes.
 
@@ -478,12 +549,61 @@ async def _render_and_encode(
         espn_id=home["espn_id"],
     )
 
-    # Enrich DecodedAssets with both logos and decisions (D-02).
+    # LEAGUE LOGO: blend seam colour, fetch logo_variants from DB, select variant,
+    # load from Redis, compute contrast decision (Phase 12 — D-05, D-06, BRAND-03).
+    # seam_rgb is the 50/50 average of the two team background colours — a
+    # lightweight proxy for the generator's diagonal blend zone.
+    seam_rgb: tuple[int, int, int] = _blend_seam_color(
+        away_decision.background_rgb, home_decision.background_rgb
+    )
+    # D-06: fetch leagues.logo_variants from Postgres so the dark variant can
+    # actually be selected.  Parameterised query only — no f-string (T-12-01).
+    # psycopg3 auto-deserialises JSONB → dict; no json.loads needed.
+    # Graceful degradation: a DB outage / pool exhaustion must not break renders
+    # for a purely cosmetic variant choice.  On any failure, degrade to None so
+    # select_league_logo_variant returns "default" — the Phase-11 behaviour.
+    league_logo_variants: dict[str, str] | None = None
+    try:
+        async with pool.connection() as conn:
+            conn.row_factory = pg_rows.dict_row
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT logo_variants FROM leagues WHERE slug = %s",
+                    (league,),
+                )
+                row = await cur.fetchone()
+        league_logo_variants = row["logo_variants"] if row else None
+    except Exception as exc:
+        await logger.awarning(
+            "league_logo_variants_fetch_failed",
+            league=league,
+            error=str(exc),
+        )
+        # select_league_logo_variant(seam_rgb, None) → "default"; render proceeds.
+    league_variant: str = select_league_logo_variant(seam_rgb, league_logo_variants)
+    league_logo: Image.Image | None = await load_league_logo(
+        slug=league,
+        variant=league_variant,
+        redis=redis,
+        settings=settings,
+    )
+    # Compute contrast decision for league logo against seam colour (BRAND-03).
+    # league_decision is None when no league logo is available (VS fallback path).
+    league_decision: ContrastDecision | None = None
+    if league_logo is not None:
+        league_decision = await _enforce_league_logo_contrast(
+            league_logo, seam_rgb, league_variant, settings, league=league
+        )
+
+    # Enrich DecodedAssets with both logos, decisions, and league logo+decision
+    # (D-02, D-08, D-05).
     assets: DecodedAssets = DecodedAssets(
         away_logo=away_logo_final,
         home_logo=home_logo_final,
         away_decision=away_decision,
         home_decision=home_decision,
+        league_logo=league_logo,
+        league_decision=league_decision,  # Phase 12 (D-05)
     )
 
     gen_fn = get_generator(kind, style)
@@ -514,6 +634,7 @@ async def render_pipeline(
     redis: Redis,
     http_client: httpx.AsyncClient,
     settings: Settings,
+    pool: AsyncConnectionPool[Any],  # NEW — threaded through to _render_and_encode
 ) -> RenderResult:
     """Return ``RenderResult(png, tier)`` for the given matchup (D-09).
 
@@ -530,6 +651,7 @@ async def render_pipeline(
         redis:       Async Redis client (``decode_responses=False``).
         http_client: Shared async HTTP client for logo re-fetch.
         settings:    Application settings (provides render_version, TTLs, etc.).
+        pool:        Async DB connection pool for leagues.logo_variants fetch (D-06).
 
     Returns:
         PNG bytes (canonical cached artifact).
@@ -583,7 +705,7 @@ async def render_pipeline(
         # ----------------------------------------------------------------
         try:
             png = await _render_and_encode(
-                league, away, home, kind, style, redis, http_client, settings
+                league, away, home, kind, style, redis, http_client, settings, pool
             )
             # CACHE-01: store canonical PNG with long TTL (D-12).
             await redis.set(render_key, png, ex=settings.render_cache_ttl)
@@ -627,7 +749,7 @@ async def render_pipeline(
         sf_max_wait=settings.sf_max_wait,
     )
     png = await _render_and_encode(
-        league, away, home, kind, style, redis, http_client, settings
+        league, away, home, kind, style, redis, http_client, settings, pool
     )
     # WR-01: Best-effort cache populate so subsequent waiters get a cache hit
     # instead of another degrade.  If the write fails, swallow the error — we

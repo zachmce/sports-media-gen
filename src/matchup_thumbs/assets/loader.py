@@ -54,6 +54,11 @@ logger = structlog.get_logger()
 # pixels, so 4096×4096 is a generous but sane upper limit.
 _MAX_LOGO_PIXELS: int = 4096 * 4096
 
+# Redis key namespace for league logos (LGL-04, D-04).
+# Distinct from the team logo namespace ``logo:`` — no underscore, one word.
+# Full key: ``leaguelogo:{slug}:{variant}``
+_LEAGUE_LOGO_KEY_PREFIX: str = "leaguelogo"
+
 
 def _decode_logo_image(raw: bytes, max_pixels: int) -> Image.Image:
     """Decode logo bytes to an RGBA ``PIL.Image`` with a decompression-bomb cap.
@@ -168,6 +173,90 @@ async def _load_one_logo(
         )
 
     return img
+
+
+async def load_league_logo(
+    slug: str,
+    variant: str,
+    redis: Redis,  # bare Redis (redis-py 8.0 is not a generic class at runtime)
+    settings: Settings,
+) -> Image.Image | None:
+    """Fetch and decode a league logo from Redis with a variant→default fallback.
+
+    Reads ``leaguelogo:{slug}:{variant}`` first; if that key is a cache miss,
+    falls back to ``leaguelogo:{slug}:default`` before returning ``None``.  This
+    mirrors the team-logo ``_load_one_logo`` variant→dark→default fallback
+    discipline (D-07 graceful degradation, AGENTS.md).
+
+    The fallback is Redis-read only — no network I/O is performed (D-07 /
+    11-CONTEXT D-10).  ``redis.set`` is never called here.
+
+    Candidate order (de-duplicated so a ``variant=="default"`` request yields a
+    single ``["default"]`` entry — no looping second read):
+
+    1. ``leaguelogo:{slug}:{variant}``   — the explicitly requested variant.
+    2. ``leaguelogo:{slug}:default``     — fallback; skipped when variant is
+                                           already ``"default"``.
+
+    The loader returns ``None`` only when ALL candidates are cache misses or
+    decode failures.  The render layer treats ``None`` as a signal to use the VS
+    wordmark fallback.
+
+    Decompression-bomb protection: every hit is decoded through the shared
+    ``_decode_logo_image`` helper with the ``_MAX_LOGO_PIXELS`` cap
+    (T-12-04-01 / T-03-09, CR-01).  A corrupted or oversized blob logs
+    ``league_logo_decode_failed`` and is treated as a miss for that candidate
+    (degrade-don't-crash — T-12-04-02).
+
+    Does NOT perform a network fetch on miss (11-CONTEXT D-07 / D-10).
+
+    Key: ``leaguelogo:{slug}:{variant}``
+
+    The ``settings`` parameter is included for interface consistency (e.g.
+    future TTL needs); the load path itself does not call ``redis.set``.
+
+    Args:
+        slug:     League slug (e.g. ``"nba"``), used in the Redis key.
+        variant:  Logo variant key (e.g. ``"default"`` or ``"dark"``).
+        redis:    Async Redis client (``decode_responses=False``).
+        settings: Application settings (for interface consistency).
+
+    Returns:
+        Decoded RGBA ``PIL.Image`` when ANY candidate key is warm and valid;
+        ``None`` when no candidate is warmed (degrade-don't-crash — LGL-04,
+        D-07, AGENTS.md).
+    """
+    # Build a de-duplicated ordered candidate list: requested variant first,
+    # then the "default" fallback — but only if the requested variant is not
+    # already "default" (avoids a second identical read / looping).
+    candidates: list[str] = [variant]
+    if variant != "default":
+        candidates.append("default")
+
+    for candidate in candidates:
+        key: bytes = f"{_LEAGUE_LOGO_KEY_PREFIX}:{slug}:{candidate}".encode()
+        raw: bytes | None = cast(bytes | None, await redis.get(key))
+        if raw is None:
+            continue  # cache miss — try next candidate
+        try:
+            return await anyio.to_thread.run_sync(
+                _decode_logo_image, raw, _MAX_LOGO_PIXELS
+            )
+        except Exception as exc:
+            await logger.aerror(
+                "league_logo_decode_failed",
+                slug=slug,
+                variant=candidate,
+                error=str(exc),
+            )
+            # Corrupted/oversized blob — treat as terminal None for this
+            # candidate; do NOT try further candidates (a corrupted :dark
+            # should not silently re-try :default from a corrupted-:default
+            # scenario; keeps degrade-don't-crash semantics without looping).
+            return None
+
+    # All candidates exhausted with no successful decode — signal VS fallback.
+    return None
 
 
 async def load_assets(

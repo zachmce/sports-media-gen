@@ -12,6 +12,7 @@ Full suite:
 from __future__ import annotations
 
 import io
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from PIL import Image
@@ -28,6 +29,35 @@ def _make_synthetic_png(size: tuple[int, int] = (100, 100)) -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", size, (128, 128, 128)).save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _make_mock_pool(logo_variants: dict[str, str] | None = None) -> MagicMock:
+    """Return a MagicMock pool that satisfies the async psycopg3 connection protocol.
+
+    Simulates ``async with pool.connection() as conn:`` with ``conn.row_factory``
+    settable and ``conn.cursor()`` yielding a cursor whose ``fetchone()`` returns
+    a dict-style row (or None) for the leagues.logo_variants query (D-06, Phase 12).
+
+    Uses MagicMock for the connection/cursor objects so that the synchronous
+    ``conn.cursor()`` call returns the cursor mock directly (not a coroutine),
+    while still supporting the async context manager protocol via manually set
+    ``__aenter__``/``__aexit__`` attributes.
+    """
+    pool = MagicMock()
+    # cursor: supports `async with conn.cursor() as cur:`
+    cursor = MagicMock()
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock(return_value=None)
+    cursor.execute = AsyncMock(return_value=None)
+    row = {"logo_variants": logo_variants} if logo_variants is not None else None
+    cursor.fetchone = AsyncMock(return_value=row)
+    # conn: supports `async with pool.connection() as conn:`
+    conn = MagicMock()
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    conn.cursor.return_value = cursor
+    pool.connection.return_value = conn
+    return pool
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +83,8 @@ async def test_unknown_kind_raises() -> None:
 
     http_client = MagicMock()
 
+    pool = _make_mock_pool()
+
     with pytest.raises(UnknownGeneratorError) as exc_info:
         await render_pipeline(
             league="nba",
@@ -63,6 +95,7 @@ async def test_unknown_kind_raises() -> None:
             redis=redis,
             http_client=http_client,
             settings=settings,
+            pool=pool,
         )
 
     assert exc_info.value.kind == "unknown_kind"
@@ -209,6 +242,7 @@ async def test_render_writes_cache() -> None:
     redis.eval = AsyncMock(return_value=1)
 
     http_client = MagicMock()
+    pool = _make_mock_pool()
 
     result = await render_pipeline(
         league="nba",
@@ -219,6 +253,7 @@ async def test_render_writes_cache() -> None:
         redis=redis,
         http_client=http_client,
         settings=settings,
+        pool=pool,
     )
 
     assert isinstance(result.png, bytes)
@@ -271,23 +306,23 @@ def test_render_key_versioning() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CACHE-07: render_version default must be 3 after the v1.2.1 hotfix bump (D-09)
+# CACHE-07/CACHE-08: render_version default must be 4 after the v1.3 bump
 # ---------------------------------------------------------------------------
 
 
-def test_render_version_default_is_3() -> None:
-    """Settings.render_version defaults to 3 after the v1.2.1 hotfix bump (CACHE-07).
+def test_render_version_default_is_4() -> None:
+    """Settings.render_version defaults to 4 after the v1.3 league-logo bump (CACHE-08).
 
-    The v1.2.1 light-secondary invisible-logo fix changed rendered output, so the
-    default bumps 2 → 3: all pre-existing :v2 render cache entries become
-    unreachable on first post-deploy request without a Redis flush, forcing a
-    re-render with the fixed contrast/variant logic.
+    The v1.3 VS→logo replacement and poster GaussianBlur seam change rendered
+    output, so the default bumps 3 → 4: all pre-existing :v3 render cache
+    entries become unreachable on first post-deploy request without a Redis
+    flush, forcing a re-render with the new league-logo output.
     The nginx proxy_cache is NOT invalidated by this bump (its key is URL-based);
     nginx entries expire on their own 30-day TTL (RESEARCH Pitfall 4).
     """
     from matchup_thumbs.settings import Settings
 
-    assert Settings().render_version == 3
+    assert Settings().render_version == 4
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +469,7 @@ async def test_cache_hit_no_rerender() -> None:
     redis.delete = AsyncMock()
 
     http_client = MagicMock()
+    pool = _make_mock_pool()
 
     result = await render_pipeline(
         league="nba",
@@ -444,6 +480,7 @@ async def test_cache_hit_no_rerender() -> None:
         redis=redis,
         http_client=http_client,
         settings=settings,
+        pool=pool,
     )
 
     assert result.png == png_bytes
@@ -483,6 +520,7 @@ async def test_singleflight_waiter() -> None:
     mock_settings.render_cache_ttl = 60
 
     http_client = MagicMock()
+    pool = _make_mock_pool()
 
     result = await render_pipeline(
         league="nba",
@@ -493,6 +531,7 @@ async def test_singleflight_waiter() -> None:
         redis=redis,
         http_client=http_client,
         settings=mock_settings,
+        pool=pool,
     )
 
     assert result.png == png_bytes
@@ -534,6 +573,7 @@ async def test_singleflight_degrade() -> None:
 
     http_client = MagicMock()
     http_client.get = AsyncMock(side_effect=Exception("network unreachable"))
+    pool = _make_mock_pool()
 
     # Degraded render should complete (using placeholder logos) without raising
     result = await render_pipeline(
@@ -545,6 +585,7 @@ async def test_singleflight_degrade() -> None:
         redis=redis,
         http_client=http_client,
         settings=mock_settings,
+        pool=pool,
     )
 
     assert isinstance(result.png, bytes)
@@ -756,6 +797,7 @@ async def test_singleflight_degrade_writes_cache() -> None:
 
     http_client = MagicMock()
     http_client.get = AsyncMock(side_effect=Exception("network unreachable"))
+    pool = _make_mock_pool()
 
     result = await render_pipeline(
         league="nba",
@@ -766,6 +808,7 @@ async def test_singleflight_degrade_writes_cache() -> None:
         redis=redis,
         http_client=http_client,
         settings=mock_settings,
+        pool=pool,
     )
 
     assert isinstance(result.png, bytes)
@@ -1262,6 +1305,8 @@ async def test_render_variant_swap_avoids_invisible_logo() -> None:
     redis = MagicMock()
     http_client = MagicMock()
 
+    pool = _make_mock_pool()
+
     with (
         patch("matchup_thumbs.render.load_assets", side_effect=fake_load_assets),
         patch(
@@ -1271,6 +1316,11 @@ async def test_render_variant_swap_avoids_invisible_logo() -> None:
         ),
         patch("matchup_thumbs.render._load_one_logo", side_effect=fake_load_one_logo),
         patch("matchup_thumbs.render.get_generator", return_value=spy_generator),
+        patch(
+            "matchup_thumbs.render.load_league_logo",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         out = await _render_and_encode(
             league="ncaa/football",
@@ -1281,6 +1331,7 @@ async def test_render_variant_swap_avoids_invisible_logo() -> None:
             redis=redis,
             http_client=http_client,
             settings=settings,
+            pool=pool,
         )
 
     assert isinstance(out, bytes) and len(out) > 0

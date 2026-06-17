@@ -327,6 +327,43 @@ def _recommend_variant(
 
 
 # ---------------------------------------------------------------------------
+# Public: league-logo variant selection (TEST-04, D-09)
+# ---------------------------------------------------------------------------
+
+
+def select_league_logo_variant(
+    seam_rgb: tuple[int, int, int],
+    logo_variants: dict[str, str] | None,
+) -> str:
+    """Select ``"default"`` or ``"dark"`` league logo variant based on seam luminance.
+
+    Mirrors the luminance-gate discipline from ``_recommend_variant``:
+    a dark seam (luminance < 0.5) is best served by a white/light logo
+    (the ESPN ``"dark"`` variant); a light seam prefers the coloured
+    ``"default"`` logo.
+
+    The function is a total function — it always returns a ``str`` so the
+    render layer needs no ``None`` handling.
+
+    Args:
+        seam_rgb:      Blended seam background colour as an (R, G, B) 3-tuple.
+        logo_variants: Dict of available variant keys (from ``leagues.logo_variants``),
+                       or ``None`` / empty.  If ``"dark"`` is not a key, falls
+                       back to ``"default"``.
+
+    Returns:
+        ``"dark"`` if the seam is dark AND ``"dark"`` exists in
+        ``logo_variants``; ``"default"`` otherwise.
+    """
+    if not logo_variants or _VARIANT_DARK not in logo_variants:
+        return "default"
+    seam_luminance = relative_luminance(seam_rgb)
+    if seam_luminance < _LIGHT_BACKGROUND_LUMINANCE:
+        return _VARIANT_DARK  # dark seam → white/light logo contrasts it
+    return "default"  # light seam → coloured logo contrasts it
+
+
+# ---------------------------------------------------------------------------
 # Decision entry point: decide_contrast (CTR-03, CTR-04)
 # ---------------------------------------------------------------------------
 
