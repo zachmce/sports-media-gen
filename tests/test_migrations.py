@@ -199,21 +199,46 @@ def test_leagues_seeded() -> None:
 
 
 @pg_required
-def test_espn_id_nullable() -> None:
-    """D-02: teams.espn_id is nullable (allows NULL for Phase 2 backfill)."""
+def test_provider_id_column_exists() -> None:
+    """0004: teams.provider_id replaces espn_id (nullable=YES preserved by rename)."""
     with _pg_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
                 SELECT is_nullable
                 FROM information_schema.columns
                 WHERE table_name = 'teams'
-                  AND column_name = 'espn_id'
+                  AND column_name = 'provider_id'
                 """
         )
         row = cur.fetchone()
 
-    assert row is not None, "teams.espn_id column does not exist"
-    assert row[0] == "YES", f"teams.espn_id should be nullable, is_nullable={row[0]}"
+    assert row is not None, "teams.provider_id column does not exist"
+    assert row[0] == "YES", (
+        f"teams.provider_id should be nullable, got is_nullable={row[0]}"
+    )
+
+
+@pg_required
+def test_provider_column_default() -> None:
+    """0004: teams.provider TEXT NOT NULL DEFAULT 'espn'."""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+                SELECT is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = 'teams'
+                  AND column_name = 'provider'
+                """
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "teams.provider column does not exist"
+    assert row[0] == "NO", (
+        f"teams.provider should be NOT NULL, got is_nullable={row[0]}"
+    )
+    assert row[1] is not None and "'espn'" in row[1], (
+        f"teams.provider should have default 'espn', got column_default={row[1]}"
+    )
 
 
 @pg_required
