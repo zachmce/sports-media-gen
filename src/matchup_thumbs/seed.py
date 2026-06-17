@@ -33,6 +33,7 @@ import argparse
 import asyncio
 import re
 from collections.abc import Sequence
+from typing import Final
 
 import httpx
 import structlog
@@ -67,6 +68,19 @@ KNOWN_LEAGUES: frozenset[str] = frozenset(LEAGUE_ENDPOINTS.keys())
 # ---------------------------------------------------------------------------
 
 _LEAGUE_LOGO_KEY_PREFIX: str = "leaguelogo"
+
+# ---------------------------------------------------------------------------
+# NCAA sportbanner mapping (T-i3r-01 SSRF gate)
+# ---------------------------------------------------------------------------
+# Fixed mapping from KNOWN_LEAGUES-validated slug to the ncaa.com sport
+# filename.  The URL is built only from settings.ncaa_sportbanner_base_url
+# (a constant) + the filename from this dict (also a constant).  No
+# user-supplied or ESPN-supplied string ever reaches the URL — the dict
+# lookup is the gate: unmapped slug → placeholder, no fetch.
+_NCAA_SPORTBANNER_SPORTS: Final[dict[str, str]] = {
+    "ncaaf": "football",
+    "ncaab": "basketball",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -232,23 +246,68 @@ async def run(
                 )
                 await redis.set(cache_key, logo_bytes, ex=settings.logo_cache_ttl)
         else:
-            # NCAA or any league with no usable distinct logo → placeholder (D-06).
-            # Always warm :default.  Also warm :dark when advertised in variant_map
-            # so the Redis namespace is internally consistent with what Postgres
-            # logo_variants advertises (12-04 belt-and-suspenders, AGENTS.md).
-            # This keeps select_league_logo_variant("dark") from cold-missing after
-            # a DB-driven variant selection — the warm :dark key resolves to the
-            # same placeholder image as :default (idempotent, no extra ESPN fetch).
-            placeholder_bytes = get_placeholder_logo()
-            for warm_variant in {"default"} | (
-                {"dark"} if "dark" in variant_map else set()
-            ):
-                cache_key = (
-                    f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:{warm_variant}".encode()
-                )
-                await redis.set(
-                    cache_key, placeholder_bytes, ex=settings.logo_cache_ttl
-                )
+            # NCAA or any league with no usable distinct logo (D-06).
+            if league_slug in _NCAA_SPORTBANNER_SPORTS:
+                # Fetch the real per-sport shield from ncaa.com's public
+                # sportbanner CDN (sanctioned second public source; see CLAUDE.md).
+                # URL is built solely from a constant base + a constant-dict-derived
+                # filename — no user/ESPN string reaches the URL (T-i3r-01 SSRF gate).
+                sport = _NCAA_SPORTBANNER_SPORTS[league_slug]
+                url = f"{settings.ncaa_sportbanner_base_url}/{sport}.png"
+                try:
+                    logo_bytes = await fetch_logo_bytes(
+                        http_client, url, semaphore, settings.espn_jitter_max
+                    )
+                    # Update Postgres so logo_url/logo_variants reflect ncaa.com URL
+                    # (parameterized %(...)s only — never f-string the slug, T-i3r-02).
+                    ncaa_variant_map = {"default": url, "dark": url}
+                    async with pool.connection() as conn, conn.cursor() as cur:
+                        await cur.execute(
+                            """
+                            UPDATE leagues
+                            SET logo_url = %(logo_url)s,
+                                logo_variants = %(logo_variants)s
+                            WHERE slug = %(slug)s
+                            """,
+                            {
+                                "slug": league_slug,
+                                "logo_url": url,
+                                "logo_variants": Jsonb(ncaa_variant_map),
+                            },
+                        )
+                except Exception as exc:
+                    await logger.aerror(
+                        "league_logo_bytes_fetch_failed",
+                        league=league_slug,
+                        url=url,
+                        error=str(exc),
+                    )
+                    logo_bytes = get_placeholder_logo()
+                # Warm BOTH :default and :dark with the same bytes (single fetch).
+                # On failure: placeholder bytes (T-i3r-03 graceful degradation).
+                for warm_variant in ("default", "dark"):
+                    cache_key = (
+                        f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:{warm_variant}".encode()
+                    )
+                    await redis.set(cache_key, logo_bytes, ex=settings.logo_cache_ttl)
+            else:
+                # Unmapped not-usable league → placeholder (D-06).
+                # Always warm :default.  Also warm :dark when advertised in variant_map
+                # so the Redis namespace is internally consistent with what Postgres
+                # logo_variants advertises (12-04 belt-and-suspenders, AGENTS.md).
+                # This keeps select_league_logo_variant("dark") from cold-missing after
+                # a DB-driven variant selection — the warm :dark key resolves to the
+                # same placeholder image as :default (idempotent, no extra ESPN fetch).
+                placeholder_bytes = get_placeholder_logo()
+                for warm_variant in {"default"} | (
+                    {"dark"} if "dark" in variant_map else set()
+                ):
+                    cache_key = (
+                        f"{_LEAGUE_LOGO_KEY_PREFIX}:{league_slug}:{warm_variant}".encode()
+                    )
+                    await redis.set(
+                        cache_key, placeholder_bytes, ex=settings.logo_cache_ttl
+                    )
 
         # --- Fetch team JSON (ESPN failure propagates → no truncate) ---
         espn_response = await fetch_teams(

@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     espn_request_timeout: float = 10.0
     espn_semaphore_size: int = 5  # D-08: conservative starting point
     espn_jitter_max: float = 0.5  # seconds; random delay between CDN logo fetches
+    # Sanctioned second public source for NCAA league shields (ncaaf, ncaab).
+    # ESPN returns only a generic same-URL icon for NCAA leagues; ncaa.com's
+    # sportbanner CDN supplies the real per-sport shield (see CLAUDE.md note).
+    # No trailing slash — sport filename appended as "/{sport}.png".
+    ncaa_sportbanner_base_url: str = "https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners"
 
     # Seed behaviour
     seed_leagues: str = "nba,nfl,mlb,nhl,ncaaf,ncaab"  # comma-separated; all by default
