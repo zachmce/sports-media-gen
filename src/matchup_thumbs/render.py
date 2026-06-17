@@ -559,15 +559,27 @@ async def _render_and_encode(
     # D-06: fetch leagues.logo_variants from Postgres so the dark variant can
     # actually be selected.  Parameterised query only — no f-string (T-12-01).
     # psycopg3 auto-deserialises JSONB → dict; no json.loads needed.
-    async with pool.connection() as conn:
-        conn.row_factory = pg_rows.dict_row
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT logo_variants FROM leagues WHERE slug = %s",
-                (league,),
-            )
-            row = await cur.fetchone()
-    league_logo_variants: dict[str, str] | None = row["logo_variants"] if row else None
+    # Graceful degradation: a DB outage / pool exhaustion must not break renders
+    # for a purely cosmetic variant choice.  On any failure, degrade to None so
+    # select_league_logo_variant returns "default" — the Phase-11 behaviour.
+    league_logo_variants: dict[str, str] | None = None
+    try:
+        async with pool.connection() as conn:
+            conn.row_factory = pg_rows.dict_row
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT logo_variants FROM leagues WHERE slug = %s",
+                    (league,),
+                )
+                row = await cur.fetchone()
+        league_logo_variants = row["logo_variants"] if row else None
+    except Exception as exc:
+        await logger.awarning(
+            "league_logo_variants_fetch_failed",
+            league=league,
+            error=str(exc),
+        )
+        # select_league_logo_variant(seam_rgb, None) → "default"; render proceeds.
     league_variant: str = select_league_logo_variant(seam_rgb, league_logo_variants)
     league_logo: Image.Image | None = await load_league_logo(
         slug=league,
