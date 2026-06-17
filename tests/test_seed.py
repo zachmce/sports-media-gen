@@ -844,148 +844,47 @@ async def test_seed_league_logo_pro_league_warms_both_keys(
     )
 
 
-async def test_seed_league_logo_ncaa_warms_placeholder_both_keys(
+async def test_seed_league_logo_ncaa_warms_sportbanner_both_keys(
     mock_redis: MagicMock,
 ) -> None:
-    """NCAA (identical hrefs) → seed warms :default AND :dark; does not raise.
+    """NCAA ncaaf → seed fetches real ncaa.com sportbanner; warms :default and :dark.
 
-    12-04 belt-and-suspenders: when variant_map advertises "dark" (even with an
-    identical href), seed now warms leaguelogo:ncaaf:dark so the Redis namespace
-    is consistent with what Postgres logo_variants advertises.  This ensures that
-    a DB-driven select_league_logo_variant returning "dark" finds a warm key.
+    i3r behavior: when _has_usable_league_logo is False AND slug is in
+    _NCAA_SPORTBANNER_SPORTS, seed fetches the real shield from ncaa.com ONCE,
+    warms BOTH leaguelogo:ncaaf:default and leaguelogo:ncaaf:dark with those same
+    bytes, and updates Postgres leagues.logo_url + logo_variants to the ncaa.com URL.
 
     Verifies:
-    - leaguelogo:ncaaf:default warmed with placeholder bytes (D-06)
-    - leaguelogo:ncaaf:dark ALSO warmed with the same placeholder bytes (12-04)
-    - No extra ESPN fetch for the identical dark href
+    - leaguelogo:ncaaf:default warmed with real ncaa.com bytes (NOT placeholder)
+    - leaguelogo:ncaaf:dark ALSO warmed with the same real bytes
+    - Real bytes != get_placeholder_logo()
+    - DB UPDATE carried the ncaa.com URL in logo_url and logo_variants
     - No exception raised
     """
+    from matchup_thumbs.seed import _NCAA_SPORTBANNER_SPORTS
     from matchup_thumbs.seed import run as seed_run
+    from matchup_thumbs.settings import settings
 
     core_api_base_url = "https://sports.core.api.espn.com"
     league_slug = "ncaaf"
     path, limit = LEAGUE_ENDPOINTS[league_slug]
-    sport, espn_league_slug = path.split("/", 1)
-    core_url = f"{core_api_base_url}/v2/sports/{sport}/leagues/{espn_league_slug}"
+    sport_key, espn_league_slug = path.split("/", 1)
+    core_url = f"{core_api_base_url}/v2/sports/{sport_key}/leagues/{espn_league_slug}"
     site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
 
     identical_href = "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
 
-    espn_teams_fixture: dict[str, Any] = {
-        "sports": [
-            {
-                "leagues": [
-                    {
-                        "teams": []  # no teams — just testing league logo path
-                    }
-                ]
-            }
-        ]
-    }
+    # Build the expected ncaa.com sportbanner URL
+    sport_filename = _NCAA_SPORTBANNER_SPORTS[league_slug]
+    ncaa_url = f"{settings.ncaa_sportbanner_base_url}/{sport_filename}.png"
 
-    def mock_http_handler(request: httpx.Request) -> httpx.Response:
-        url = str(request.url)
-        if url == core_url:
-            return httpx.Response(
-                200,
-                content=json.dumps(
-                    {
-                        "logos": [
-                            {"href": identical_href, "rel": ["full", "default"]},
-                            {"href": identical_href, "rel": ["full", "dark"]},
-                        ]
-                    }
-                ).encode(),
-                headers={"content-type": "application/json"},
-            )
-        if url == site_url:
-            return httpx.Response(
-                200,
-                content=json.dumps(espn_teams_fixture).encode(),
-                headers={"content-type": "application/json"},
-            )
-        return httpx.Response(404)
+    # Distinct tiny PNG that represents the real NCAA shield (NOT the placeholder)
+    def _make_tiny_png() -> bytes:
+        buf = io.BytesIO()
+        _Image.new("RGBA", (10, 10), (0, 100, 200, 255)).save(buf, format="PNG")
+        return buf.getvalue()
 
-    pool = MagicMock()
-    conn = MagicMock()
-    cursor = AsyncMock()
-    cursor.__aenter__ = AsyncMock(return_value=cursor)
-    cursor.__aexit__ = AsyncMock(return_value=None)
-    cursor.fetchone = AsyncMock(return_value=(1,))
-    cursor.rowcount = 0
-    conn.__aenter__ = AsyncMock(return_value=conn)
-    conn.__aexit__ = AsyncMock(return_value=None)
-    conn.cursor = MagicMock(return_value=cursor)
-    pool.connection = MagicMock(return_value=conn)
-
-    transport = httpx.MockTransport(handler=mock_http_handler)
-    async with httpx.AsyncClient(transport=transport) as http_client:
-        await seed_run(pool, mock_redis, http_client, [league_slug])
-
-    set_calls = mock_redis.set.call_args_list
-    set_keys = [c.args[0] if c.args else c.kwargs.get("name", b"") for c in set_calls]
-    league_logo_keys = [k for k in set_keys if k.startswith(b"leaguelogo:")]
-
-    assert b"leaguelogo:ncaaf:default" in league_logo_keys, (
-        "Expected leaguelogo:ncaaf:default warmed with placeholder, "
-        f"got {league_logo_keys}"
-    )
-    assert b"leaguelogo:ncaaf:dark" in league_logo_keys, (
-        "Expected leaguelogo:ncaaf:dark also warmed (12-04 belt-and-suspenders), "
-        f"got {league_logo_keys}"
-    )
-    # Both keys must be warmed with placeholder bytes
-    placeholder = get_placeholder_logo()
-    for target_key in (b"leaguelogo:ncaaf:default", b"leaguelogo:ncaaf:dark"):
-        for c in set_calls:
-            k = c.args[0] if c.args else b""
-            if k == target_key:
-                warmed_bytes = c.args[1] if len(c.args) > 1 else b""
-                assert warmed_bytes == placeholder, (
-                    f"NCAA {target_key!r} must be warmed with placeholder bytes"
-                )
-                break
-
-
-# ---------------------------------------------------------------------------
-# 12-04 Task 2: NCAA-like league warms both :default and :dark (belt-and-suspenders)
-# ---------------------------------------------------------------------------
-
-
-async def test_seed_ncaa_like_league_warms_dark_and_default(
-    mock_redis: MagicMock,
-) -> None:
-    """12-04: NCAA-like league (identical hrefs) warms BOTH :default and :dark in Redis.
-
-    This test drives just the league-logo prewarm block via a minimal full seed
-    call (mocked httpx + pool) to assert that when variant_map advertises "dark"
-    but all hrefs are identical, the seed writes both leaguelogo:{slug}:default
-    and leaguelogo:{slug}:dark with the placeholder bytes.
-
-    This is the belt-and-suspenders complement to Task 1 (loader fallback):
-    Task 1 fixes cold-key reads at the load layer; Task 2 ensures the Redis
-    namespace is internally consistent with what Postgres logo_variants advertises
-    so the :dark key is present after seed, not only after the first load.
-
-    Assertions:
-    - mock_redis.set called for leaguelogo:ncaab:default (placeholder bytes)
-    - mock_redis.set called for leaguelogo:ncaab:dark (same placeholder bytes)
-    - No extra ESPN CDN fetch (identical hrefs → no fetch in the else-branch)
-    - No exception raised
-    """
-    from matchup_thumbs.seed import run as seed_run
-
-    core_api_base_url = "https://sports.core.api.espn.com"
-    league_slug = "ncaab"
-    path, limit = LEAGUE_ENDPOINTS[league_slug]
-    sport, espn_league_slug = path.split("/", 1)
-    core_url = f"{core_api_base_url}/v2/sports/{sport}/leagues/{espn_league_slug}"
-    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
-
-    # NCAA placeholder: both hrefs identical → _has_usable_league_logo returns False
-    identical_href = (
-        "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-basketball-college.png"
-    )
+    tiny_png = _make_tiny_png()
 
     espn_teams_fixture: dict[str, Any] = {
         "sports": [{"leagues": [{"teams": []}]}]
@@ -1012,6 +911,160 @@ async def test_seed_ncaa_like_league_warms_dark_and_default(
                 content=json.dumps(espn_teams_fixture).encode(),
                 headers={"content-type": "application/json"},
             )
+        if url == ncaa_url:
+            # Real ncaa.com sportbanner fetch
+            return httpx.Response(200, content=tiny_png)
+        return httpx.Response(404)
+
+    pool = MagicMock()
+    conn = MagicMock()
+    cursor = AsyncMock()
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock(return_value=None)
+    cursor.fetchone = AsyncMock(return_value=(1,))
+    cursor.rowcount = 0
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    conn.cursor = MagicMock(return_value=cursor)
+    pool.connection = MagicMock(return_value=conn)
+
+    transport = httpx.MockTransport(handler=mock_http_handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        await seed_run(pool, mock_redis, http_client, [league_slug])
+
+    set_calls = mock_redis.set.call_args_list
+    set_keys = [c.args[0] if c.args else c.kwargs.get("name", b"") for c in set_calls]
+    league_logo_keys = [k for k in set_keys if k.startswith(b"leaguelogo:")]
+
+    assert b"leaguelogo:ncaaf:default" in league_logo_keys, (
+        f"Expected leaguelogo:ncaaf:default warmed, got {league_logo_keys}"
+    )
+    assert b"leaguelogo:ncaaf:dark" in league_logo_keys, (
+        f"Expected leaguelogo:ncaaf:dark warmed, got {league_logo_keys}"
+    )
+
+    # Both keys must carry the real ncaa.com bytes (NOT the placeholder)
+    placeholder = get_placeholder_logo()
+    for target_key in (b"leaguelogo:ncaaf:default", b"leaguelogo:ncaaf:dark"):
+        matched = False
+        for c in set_calls:
+            k = c.args[0] if c.args else b""
+            if k == target_key:
+                warmed_bytes = c.args[1] if len(c.args) > 1 else b""
+                assert warmed_bytes == tiny_png, (
+                    f"{target_key!r} must be warmed with real ncaa.com bytes, "
+                    f"not placeholder"
+                )
+                assert warmed_bytes != placeholder, (
+                    f"{target_key!r} must NOT be warmed with placeholder bytes"
+                )
+                matched = True
+                break
+        assert matched, f"No redis.set call found for {target_key!r}"
+
+    # Assert the DB UPDATE carried the ncaa.com URL in logo_url and logo_variants
+    execute_calls = cursor.execute.call_args_list
+    update_params_list = [
+        c.args[1]
+        for c in execute_calls
+        if len(c.args) >= 2
+        and isinstance(c.args[1], dict)
+        and c.args[1].get("logo_url") == ncaa_url
+    ]
+    assert update_params_list, (
+        f"Expected a DB UPDATE with logo_url={ncaa_url!r}; "
+        f"execute calls: {[c.args[1] for c in execute_calls if len(c.args) >= 2]}"
+    )
+    update_params = update_params_list[0]
+    assert update_params["slug"] == league_slug
+    variants_arg = update_params["logo_variants"]
+    # Jsonb wraps the dict — compare .obj attribute or the dict itself
+    variants_dict = (
+        variants_arg.obj if hasattr(variants_arg, "obj") else variants_arg
+    )
+    assert variants_dict == {"default": ncaa_url, "dark": ncaa_url}, (
+        f"logo_variants must be {{default: url, dark: url}}, got {variants_dict}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 12-04 Task 2: NCAA-like league warms both :default and :dark (belt-and-suspenders)
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_ncaa_like_league_warms_sportbanner_both_keys(
+    mock_redis: MagicMock,
+) -> None:
+    """NCAA ncaab → seed fetches real ncaa.com sportbanner; warms :default and :dark.
+
+    i3r behavior: ncaab (identical ESPN hrefs → not usable) fetches the real
+    basketball shield from ncaa.com ONCE, warms both leaguelogo:ncaab:default and
+    leaguelogo:ncaab:dark with those same bytes, and updates Postgres leagues.logo_url
+    + logo_variants to the ncaa.com URL.
+
+    Assertions:
+    - mock_redis.set called for leaguelogo:ncaab:default (real ncaa.com bytes)
+    - mock_redis.set called for leaguelogo:ncaab:dark (same real bytes)
+    - Real bytes != get_placeholder_logo()
+    - DB UPDATE carried the ncaa.com URL in logo_url and logo_variants
+    - No exception raised
+    """
+    from matchup_thumbs.seed import _NCAA_SPORTBANNER_SPORTS
+    from matchup_thumbs.seed import run as seed_run
+    from matchup_thumbs.settings import settings
+
+    core_api_base_url = "https://sports.core.api.espn.com"
+    league_slug = "ncaab"
+    path, limit = LEAGUE_ENDPOINTS[league_slug]
+    sport_key, espn_league_slug = path.split("/", 1)
+    core_url = f"{core_api_base_url}/v2/sports/{sport_key}/leagues/{espn_league_slug}"
+    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+
+    # NCAA placeholder: both hrefs identical → _has_usable_league_logo returns False
+    identical_href = (
+        "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-basketball-college.png"
+    )
+
+    # Build the expected ncaa.com sportbanner URL for basketball
+    sport_filename = _NCAA_SPORTBANNER_SPORTS[league_slug]
+    ncaa_url = f"{settings.ncaa_sportbanner_base_url}/{sport_filename}.png"
+
+    # Distinct tiny PNG representing the real NCAA basketball shield (not placeholder)
+    def _make_tiny_png() -> bytes:
+        buf = io.BytesIO()
+        _Image.new("RGBA", (10, 10), (200, 50, 0, 255)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    tiny_png = _make_tiny_png()
+
+    espn_teams_fixture: dict[str, Any] = {
+        "sports": [{"leagues": [{"teams": []}]}]
+    }
+
+    def mock_http_handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == core_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(
+                    {
+                        "logos": [
+                            {"href": identical_href, "rel": ["full", "default"]},
+                            {"href": identical_href, "rel": ["full", "dark"]},
+                        ]
+                    }
+                ).encode(),
+                headers={"content-type": "application/json"},
+            )
+        if url == site_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(espn_teams_fixture).encode(),
+                headers={"content-type": "application/json"},
+            )
+        if url == ncaa_url:
+            # Real ncaa.com sportbanner fetch
+            return httpx.Response(200, content=tiny_png)
         return httpx.Response(404)
 
     pool = MagicMock()
@@ -1038,10 +1091,10 @@ async def test_seed_ncaa_like_league_warms_dark_and_default(
         f"Expected leaguelogo:ncaab:default warmed, got {league_logo_keys}"
     )
     assert b"leaguelogo:ncaab:dark" in league_logo_keys, (
-        f"Expected leaguelogo:ncaab:dark warmed (12-04 belt-and-suspenders), "
-        f"got {league_logo_keys}"
+        f"Expected leaguelogo:ncaab:dark warmed, got {league_logo_keys}"
     )
 
+    # Both keys must carry the real ncaa.com bytes (NOT the placeholder)
     placeholder = get_placeholder_logo()
     for target_key in (b"leaguelogo:ncaab:default", b"leaguelogo:ncaab:dark"):
         matched = False
@@ -1049,8 +1102,144 @@ async def test_seed_ncaa_like_league_warms_dark_and_default(
             k = c.args[0] if c.args else b""
             if k == target_key:
                 warmed_bytes = c.args[1] if len(c.args) > 1 else b""
+                assert warmed_bytes == tiny_png, (
+                    f"{target_key!r} must be warmed with real ncaa.com bytes"
+                )
+                assert warmed_bytes != placeholder, (
+                    f"{target_key!r} must NOT be warmed with placeholder bytes"
+                )
+                matched = True
+                break
+        assert matched, f"No redis.set call found for {target_key!r}"
+
+    # Assert the DB UPDATE carried the ncaa.com URL in logo_url and logo_variants
+    execute_calls = cursor.execute.call_args_list
+    update_params_list = [
+        c.args[1]
+        for c in execute_calls
+        if len(c.args) >= 2
+        and isinstance(c.args[1], dict)
+        and c.args[1].get("logo_url") == ncaa_url
+    ]
+    assert update_params_list, (
+        f"Expected a DB UPDATE with logo_url={ncaa_url!r}; "
+        f"execute calls: {[c.args[1] for c in execute_calls if len(c.args) >= 2]}"
+    )
+    update_params = update_params_list[0]
+    assert update_params["slug"] == league_slug
+    variants_arg = update_params["logo_variants"]
+    variants_dict = (
+        variants_arg.obj if hasattr(variants_arg, "obj") else variants_arg
+    )
+    assert variants_dict == {"default": ncaa_url, "dark": ncaa_url}, (
+        f"logo_variants must be {{default: url, dark: url}}, got {variants_dict}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# i3r: NCAA sportbanner fetch-failure fallback test
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_ncaa_sportbanner_fetch_failure_falls_back_to_placeholder(
+    mock_redis: MagicMock,
+) -> None:
+    """NCAA ncaaf sportbanner fetch failure → both keys warmed with placeholder.
+
+    When the ncaa.com sportbanner URL returns a non-200 (503), seed must:
+    - NOT raise any exception
+    - Warm leaguelogo:ncaaf:default with get_placeholder_logo() bytes
+    - Warm leaguelogo:ncaaf:dark with get_placeholder_logo() bytes
+    - NOT update Postgres to the ncaa.com URL (DB stays as-is from the ESPN UPDATE)
+    """
+    from matchup_thumbs.seed import _NCAA_SPORTBANNER_SPORTS
+    from matchup_thumbs.seed import run as seed_run
+    from matchup_thumbs.settings import settings
+
+    core_api_base_url = "https://sports.core.api.espn.com"
+    league_slug = "ncaaf"
+    path, limit = LEAGUE_ENDPOINTS[league_slug]
+    sport_key, espn_league_slug = path.split("/", 1)
+    core_url = f"{core_api_base_url}/v2/sports/{sport_key}/leagues/{espn_league_slug}"
+    site_url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/teams?limit={limit}"
+
+    identical_href = (
+        "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
+    )
+
+    sport_filename = _NCAA_SPORTBANNER_SPORTS[league_slug]
+    ncaa_url = f"{settings.ncaa_sportbanner_base_url}/{sport_filename}.png"
+
+    espn_teams_fixture: dict[str, Any] = {
+        "sports": [{"leagues": [{"teams": []}]}]
+    }
+
+    def mock_http_handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == core_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(
+                    {
+                        "logos": [
+                            {"href": identical_href, "rel": ["full", "default"]},
+                            {"href": identical_href, "rel": ["full", "dark"]},
+                        ]
+                    }
+                ).encode(),
+                headers={"content-type": "application/json"},
+            )
+        if url == site_url:
+            return httpx.Response(
+                200,
+                content=json.dumps(espn_teams_fixture).encode(),
+                headers={"content-type": "application/json"},
+            )
+        if url == ncaa_url:
+            # Simulate ncaa.com CDN failure
+            return httpx.Response(503, content=b"Service Unavailable")
+        return httpx.Response(404)
+
+    pool = MagicMock()
+    conn = MagicMock()
+    cursor = AsyncMock()
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock(return_value=None)
+    cursor.fetchone = AsyncMock(return_value=(1,))
+    cursor.rowcount = 0
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    conn.cursor = MagicMock(return_value=cursor)
+    pool.connection = MagicMock(return_value=conn)
+
+    transport = httpx.MockTransport(handler=mock_http_handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        # Must NOT raise even though ncaa.com returns 503
+        await seed_run(pool, mock_redis, http_client, [league_slug])
+
+    set_calls = mock_redis.set.call_args_list
+    set_keys = [c.args[0] if c.args else c.kwargs.get("name", b"") for c in set_calls]
+    league_logo_keys = [k for k in set_keys if k.startswith(b"leaguelogo:")]
+
+    assert b"leaguelogo:ncaaf:default" in league_logo_keys, (
+        f"Expected leaguelogo:ncaaf:default warmed even on fetch failure, "
+        f"got {league_logo_keys}"
+    )
+    assert b"leaguelogo:ncaaf:dark" in league_logo_keys, (
+        f"Expected leaguelogo:ncaaf:dark warmed even on fetch failure, "
+        f"got {league_logo_keys}"
+    )
+
+    # Both keys must carry the placeholder bytes on failure
+    placeholder = get_placeholder_logo()
+    for target_key in (b"leaguelogo:ncaaf:default", b"leaguelogo:ncaaf:dark"):
+        matched = False
+        for c in set_calls:
+            k = c.args[0] if c.args else b""
+            if k == target_key:
+                warmed_bytes = c.args[1] if len(c.args) > 1 else b""
                 assert warmed_bytes == placeholder, (
-                    f"{target_key!r} must be warmed with placeholder bytes"
+                    f"{target_key!r} must fall back to placeholder on fetch failure"
                 )
                 matched = True
                 break
