@@ -52,7 +52,7 @@ def _team(slug: str) -> dict[str, Any]:
         "primary_color": "#552583",
         "secondary_color": "#fdb927",
         "logo_url": None,
-        "espn_id": "13",
+        "provider_id": "13",
     }
 
 

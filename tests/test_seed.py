@@ -31,7 +31,8 @@ from matchup_thumbs.espn.client import (
     fetch_teams,
     select_logo_url,
 )
-from matchup_thumbs.espn.models import ESPNLogo, ESPNTeamEntry
+from matchup_thumbs.espn.models import ESPNLogo
+from matchup_thumbs.providers.types import ProviderTeam
 from matchup_thumbs.seed import generate_aliases, normalize_input
 from tests.conftest import pg_required
 
@@ -245,17 +246,16 @@ def test_normalize_input_casefolds_and_strips() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_lakers_entry() -> ESPNTeamEntry:
-    """Return a Lakers-like ESPNTeamEntry (nickname matches location)."""
-    return ESPNTeamEntry(
-        id="13",
+def _make_lakers_entry() -> ProviderTeam:
+    """Return a Lakers-like ProviderTeam (snake_case canonical fields)."""
+    return ProviderTeam(
+        provider_id="13",
         slug="los-angeles-lakers",
         abbreviation="LAL",
-        displayName="Los Angeles Lakers",
-        shortDisplayName="Lakers",
+        display_name="Los Angeles Lakers",
+        short_display_name="Lakers",
         name="Lakers",
         location="Los Angeles",
-        # nickname is NOT a field on ESPNTeamEntry — it is deliberately excluded
     )
 
 
@@ -705,7 +705,7 @@ async def test_fetch_league_logo_data_http_error_returns_empty_list() -> None:
 
 async def test_has_usable_league_logo_distinct_hrefs_returns_true() -> None:
     """_has_usable_league_logo: distinct hrefs → True (pro league)."""
-    from matchup_thumbs.seed import _has_usable_league_logo
+    from matchup_thumbs.providers.espn import _has_usable_league_logo
 
     variant_map = {
         "default": "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png",
@@ -716,7 +716,7 @@ async def test_has_usable_league_logo_distinct_hrefs_returns_true() -> None:
 
 async def test_has_usable_league_logo_identical_hrefs_returns_false() -> None:
     """_has_usable_league_logo: identical hrefs → False (NCAA case, D-06)."""
-    from matchup_thumbs.seed import _has_usable_league_logo
+    from matchup_thumbs.providers.espn import _has_usable_league_logo
 
     identical_href = (
         "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-football-college.png"
@@ -727,7 +727,7 @@ async def test_has_usable_league_logo_identical_hrefs_returns_false() -> None:
 
 async def test_has_usable_league_logo_empty_map_returns_false() -> None:
     """_has_usable_league_logo: empty map → False."""
-    from matchup_thumbs.seed import _has_usable_league_logo
+    from matchup_thumbs.providers.espn import _has_usable_league_logo
 
     assert _has_usable_league_logo({}) is False
 
@@ -867,7 +867,7 @@ async def test_seed_league_logo_ncaa_warms_sportbanner_both_keys(
     - DB UPDATE carried the ncaa.com URL in logo_url and logo_variants
     - No exception raised
     """
-    from matchup_thumbs.seed import _NCAA_SPORTBANNER_SPORTS
+    from matchup_thumbs.providers.espn import _NCAA_SPORTBANNER_SPORTS
     from matchup_thumbs.seed import run as seed_run
     from matchup_thumbs.settings import settings
 
@@ -1015,7 +1015,7 @@ async def test_seed_ncaa_like_league_warms_sportbanner_both_keys(
     - DB UPDATE carried the ncaa.com URL in logo_url and logo_variants
     - No exception raised
     """
-    from matchup_thumbs.seed import _NCAA_SPORTBANNER_SPORTS
+    from matchup_thumbs.providers.espn import _NCAA_SPORTBANNER_SPORTS
     from matchup_thumbs.seed import run as seed_run
     from matchup_thumbs.settings import settings
 
@@ -1154,7 +1154,7 @@ async def test_seed_ncaa_sportbanner_fetch_failure_falls_back_to_placeholder(
     - Warm leaguelogo:ncaaf:dark with get_placeholder_logo() bytes
     - NOT update Postgres to the ncaa.com URL (DB stays as-is from the ESPN UPDATE)
     """
-    from matchup_thumbs.seed import _NCAA_SPORTBANNER_SPORTS
+    from matchup_thumbs.providers.espn import _NCAA_SPORTBANNER_SPORTS
     from matchup_thumbs.seed import run as seed_run
     from matchup_thumbs.settings import settings
 

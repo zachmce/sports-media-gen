@@ -200,7 +200,7 @@ def test_leagues_seeded() -> None:
 
 @pg_required
 def test_provider_id_column_exists() -> None:
-    """0004: teams.provider_id replaces espn_id (nullable=YES preserved by rename)."""
+    """0004: teams.provider_id column exists with nullable=YES (preserved by rename)."""
     with _pg_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """

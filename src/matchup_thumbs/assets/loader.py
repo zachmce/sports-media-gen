@@ -1,7 +1,7 @@
 """Asset loader — the only I/O component in the render pipeline (D-16).
 
 Reads each team's logo bytes from Redis using a variant-aware key
-``logo:{league}:{espn_id}:{variant}`` (D-08), re-fetches on a cache miss
+``logo:{league}:{provider_id}:{variant}`` (D-08), re-fetches on a cache miss
 through the fallback chain below, and decodes bytes to ``PIL.Image`` (RGBA
 mode) so that generator functions remain pure with no I/O (GEN-04).
 
@@ -18,9 +18,9 @@ On a Redis miss, the fetch URL is resolved in order:
 
 Key contracts
 -------------
-- The Redis key ``logo:{league}:{espn_id}:{variant}`` matches what seed.py
+- The Redis key ``logo:{league}:{provider_id}:{variant}`` matches what seed.py
   writes for the ``default`` variant
-  (``f"logo:{league_slug}:{team.id}:default".encode()``; ``espn_id == team.id``).
+  (``f"logo:{league_slug}:{team.provider_id}:default".encode()``).
   Non-default variants are populated lazily on first request (D-10).
 - The passed ``http_client`` is the application-level shared client from
   ``app.state.http_client``.  This module never instantiates its own client.
@@ -100,13 +100,13 @@ async def _load_one_logo(
     """Fetch a single team logo as an RGBA PIL.Image.
 
     Variant-aware fallback chain (D-06):
-    1. Redis hit on ``logo:{league}:{espn_id}:{variant}`` → decode bytes.
+    1. Redis hit on ``logo:{league}:{provider_id}:{variant}`` → decode bytes.
     2. Redis miss → resolve fetch URL via:
        a. ``team["logo_variants"][variant]``   — requested variant href.
        b. ``team["logo_variants"]["dark"]``    — dark fallback.
        c. ``team["logo_variants"]["default"]`` — default fallback.
        d. ``team["logo_url"]``                 — legacy terminal source.
-    3. Fetch URL → re-cache under ``logo:{league}:{espn_id}:{variant}`` → decode.
+    3. Fetch URL → re-cache under ``logo:{league}:{provider_id}:{variant}`` → decode.
     4. Any failure → ``get_placeholder_logo()`` → decode bytes (T-03-09).
 
     Malformed bytes (corrupted cache entry or bad network response) fall back
@@ -115,9 +115,9 @@ async def _load_one_logo(
     The caller should never receive ``None`` — the placeholder is always
     available via ``importlib.resources``.
     """
-    # Variant-aware key (D-08): logo:{league}:{espn_id}:{variant}
-    # Matches seed.py which writes f"logo:{league_slug}:{team.id}:default".encode()
-    key: bytes = f"logo:{league}:{team['espn_id']}:{variant}".encode()
+    # Variant-aware key (D-08): logo:{league}:{provider_id}:{variant}
+    # Matches seed.py write: f"logo:{league_slug}:{team.provider_id}:default".encode()
+    key: bytes = f"logo:{league}:{team['provider_id']}:{variant}".encode()
     # decode_responses=False guarantees bytes at runtime; cast for mypy.
     raw: bytes | None = cast(bytes | None, await redis.get(key))
 
@@ -142,7 +142,7 @@ async def _load_one_logo(
                 await logger.aerror(
                     "logo_refetch_failed",
                     url=fetch_url,
-                    espn_id=team["espn_id"],
+                    provider_id=team["provider_id"],
                     league=league,
                     variant=variant,
                     error=str(exc),
@@ -162,7 +162,7 @@ async def _load_one_logo(
     except Exception as decode_exc:
         await logger.aerror(
             "logo_decode_failed",
-            espn_id=team["espn_id"],
+            provider_id=team["provider_id"],
             league=league,
             error=str(decode_exc),
         )
@@ -276,7 +276,7 @@ async def load_assets(
     (Phase 10 D-01, D-02).  All I/O is confined here so generators stay pure.
 
     Logo bytes are resolved from Redis using the variant-aware key
-    ``logo:{league}:{espn_id}:{variant}`` and, on a miss, fetched through the
+    ``logo:{league}:{provider_id}:{variant}`` and, on a miss, fetched through the
     fallback chain: requested variant → dark → default → legacy ``logo_url`` →
     bundled placeholder (D-06).  Distinct variants produce distinct cache entries
     that do not evict each other (D-08).

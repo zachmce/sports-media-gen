@@ -28,7 +28,7 @@ class ProviderTeam(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     # Required fields — no defaults; ValidationError if missing
-    provider_id: str  # opaque provider-specific ID (was espn_id)
+    provider_id: str  # opaque provider-specific ID (D-07)
     slug: str  # e.g. "los-angeles-lakers"; upsert key with league_id
     display_name: str  # e.g. "Los Angeles Lakers"
     abbreviation: str  # e.g. "LAL"

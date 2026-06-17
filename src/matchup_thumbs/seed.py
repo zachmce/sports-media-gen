@@ -209,14 +209,22 @@ async def run(
                 shield.bytes_dark,
                 ex=settings.logo_cache_ttl,
             )
-        elif shield.bytes_default is not None and "dark" in shield.variant_map:
-            # Dark is advertised in variant_map but provider signals it shares
-            # the same bytes as default (bytes_dark=None, bytes_default set).
-            # Warm :dark with the same bytes to keep the Redis namespace
-            # internally consistent with what Postgres logo_variants advertises.
+        elif "dark" in shield.variant_map:
+            # Dark is advertised in variant_map — warm :dark to keep the Redis
+            # namespace consistent with what Postgres logo_variants advertises.
+            # If bytes_default is available (provider fetched the bytes), reuse
+            # them (NCAA case: single fetch shared by both variants).
+            # If bytes_default is None (provider fetch failed), fall back to
+            # placeholder so the cache namespace stays internally consistent
+            # (12-04 belt-and-suspenders, AGENTS.md — degrade-don't-crash).
+            dark_bytes = (
+                shield.bytes_default
+                if shield.bytes_default is not None
+                else get_placeholder_logo()
+            )
             await redis.set(
                 f"{pfx}:dark".encode(),
-                shield.bytes_default,
+                dark_bytes,
                 ex=settings.logo_cache_ttl,
             )
 

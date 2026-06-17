@@ -697,7 +697,7 @@ async def test_asset_loader_refetch_on_miss() -> None:
 
     assert assets["away_logo"].mode == "RGBA"
     # Verify re-cache called with logo_cache_ttl for the variant-suffixed key (D-08)
-    expected_key = f"logo:nba:{lakers_with_url['espn_id']}:default".encode()
+    expected_key = f"logo:nba:{lakers_with_url['provider_id']}:default".encode()
     redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
 
 
@@ -944,7 +944,7 @@ async def test_asset_loader_variant_fallback() -> None:
     # The loader should have fetched the "dark" fallback href (first available)
     http_client.get.assert_any_call(dark_href)
     # The result is cached under the *requested* variant key (not "dark")
-    expected_key = f"logo:nba:{lakers_with_variants['espn_id']}:scoreboard".encode()
+    expected_key = f"logo:nba:{lakers_with_variants['provider_id']}:scoreboard".encode()
     redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
 
 
@@ -993,7 +993,7 @@ async def test_asset_loader_fallback_to_logo_url() -> None:
     # Loader must have fetched the legacy logo_url
     http_client.get.assert_any_call(legacy_href)
     # Cached under the :default variant key
-    expected_key = f"logo:nba:{lakers_no_variants['espn_id']}:default".encode()
+    expected_key = f"logo:nba:{lakers_no_variants['provider_id']}:default".encode()
     redis.set.assert_any_call(expected_key, png_bytes, ex=settings.logo_cache_ttl)
 
 
@@ -1049,7 +1049,7 @@ async def test_variant_recheck_falls_back_when_variant_invisible() -> None:
         decision,
         settings,
         league="ncaa/football",
-        espn_id="333",
+        provider_id="333",
     )
 
     # White variant on white bg is invisible → fell back to the crimson default,
@@ -1088,7 +1088,7 @@ async def test_variant_recheck_keeps_variant_when_contrast_holds() -> None:
         decision,
         settings,
         league="ncaa/football",
-        espn_id="333",
+        provider_id="333",
     )
 
     assert logo is white_variant
@@ -1118,7 +1118,7 @@ async def test_variant_recheck_noop_when_no_variant_requested() -> None:
     settings.min_contrast_ratio = 3.0
 
     logo, ratio = await _resolve_variant_logo(
-        loaded, default, decision, settings, league="nba", espn_id="13"
+        loaded, default, decision, settings, league="nba", provider_id="13"
     )
 
     # No variant was requested → loaded logo returned unchanged with the decision's
@@ -1165,7 +1165,7 @@ async def test_enforce_logo_contrast_escalates_to_outline() -> None:
         decision,
         settings,
         league="mlb",
-        espn_id="17",
+        provider_id="17",
     )
 
     # Red-on-red can't be fixed by swapping the image → OUTLINE is forced and the
@@ -1204,7 +1204,7 @@ async def test_enforce_logo_contrast_no_outline_when_legible() -> None:
         decision,
         settings,
         league="ncaa/football",
-        espn_id="333",
+        provider_id="333",
     )
 
     assert logo is white_variant

@@ -171,7 +171,7 @@ def fixture_lakers() -> dict[str, Any]:
         "primary_color": "#552583",
         "secondary_color": "#fdb927",
         "logo_url": None,
-        "espn_id": "13",
+        "provider_id": "13",
         "logo_variants": None,
     }
 
@@ -191,7 +191,7 @@ def fixture_clippers() -> dict[str, Any]:
         "primary_color": "#c8102e",
         "secondary_color": "#1d428a",
         "logo_url": None,
-        "espn_id": "12",
+        "provider_id": "12",
         "logo_variants": None,
     }
 
@@ -318,16 +318,16 @@ def seeded_registry(request: pytest.FixtureRequest) -> Generator[None]:
                 """
                 INSERT INTO teams
                     (league_id, slug, display_name, abbreviation,
-                     primary_color, secondary_color, espn_id)
+                     primary_color, secondary_color, provider_id)
                 VALUES (%(league_id)s, %(slug)s, %(display_name)s,
                         %(abbreviation)s, %(primary_color)s,
-                        %(secondary_color)s, %(espn_id)s)
+                        %(secondary_color)s, %(provider_id)s)
                 ON CONFLICT (league_id, slug) DO UPDATE SET
                     display_name    = EXCLUDED.display_name,
                     abbreviation    = EXCLUDED.abbreviation,
                     primary_color   = EXCLUDED.primary_color,
                     secondary_color = EXCLUDED.secondary_color,
-                    espn_id         = EXCLUDED.espn_id
+                    provider_id     = EXCLUDED.provider_id
                 RETURNING id
                 """,
                 {
@@ -337,7 +337,7 @@ def seeded_registry(request: pytest.FixtureRequest) -> Generator[None]:
                     "abbreviation": "LAL",
                     "primary_color": "#552583",
                     "secondary_color": "#fdb927",
-                    "espn_id": "13",
+                    "provider_id": "13",
                 },
             )
             row = cur.fetchone()
@@ -349,16 +349,16 @@ def seeded_registry(request: pytest.FixtureRequest) -> Generator[None]:
                 """
                 INSERT INTO teams
                     (league_id, slug, display_name, abbreviation,
-                     primary_color, secondary_color, espn_id)
+                     primary_color, secondary_color, provider_id)
                 VALUES (%(league_id)s, %(slug)s, %(display_name)s,
                         %(abbreviation)s, %(primary_color)s,
-                        %(secondary_color)s, %(espn_id)s)
+                        %(secondary_color)s, %(provider_id)s)
                 ON CONFLICT (league_id, slug) DO UPDATE SET
                     display_name    = EXCLUDED.display_name,
                     abbreviation    = EXCLUDED.abbreviation,
                     primary_color   = EXCLUDED.primary_color,
                     secondary_color = EXCLUDED.secondary_color,
-                    espn_id         = EXCLUDED.espn_id
+                    provider_id     = EXCLUDED.provider_id
                 RETURNING id
                 """,
                 {
@@ -368,7 +368,7 @@ def seeded_registry(request: pytest.FixtureRequest) -> Generator[None]:
                     "abbreviation": "LAC",
                     "primary_color": "#c8102e",
                     "secondary_color": "#1d428a",
-                    "espn_id": "12",
+                    "provider_id": "12",
                 },
             )
             row = cur.fetchone()
@@ -380,16 +380,16 @@ def seeded_registry(request: pytest.FixtureRequest) -> Generator[None]:
                 """
                 INSERT INTO teams
                     (league_id, slug, display_name, abbreviation,
-                     primary_color, secondary_color, espn_id)
+                     primary_color, secondary_color, provider_id)
                 VALUES (%(league_id)s, %(slug)s, %(display_name)s,
                         %(abbreviation)s, %(primary_color)s,
-                        %(secondary_color)s, %(espn_id)s)
+                        %(secondary_color)s, %(provider_id)s)
                 ON CONFLICT (league_id, slug) DO UPDATE SET
                     display_name    = EXCLUDED.display_name,
                     abbreviation    = EXCLUDED.abbreviation,
                     primary_color   = EXCLUDED.primary_color,
                     secondary_color = EXCLUDED.secondary_color,
-                    espn_id         = EXCLUDED.espn_id
+                    provider_id     = EXCLUDED.provider_id
                 RETURNING id
                 """,
                 {
@@ -399,7 +399,7 @@ def seeded_registry(request: pytest.FixtureRequest) -> Generator[None]:
                     "abbreviation": "LAC",
                     "primary_color": "#0073cf",
                     "secondary_color": "#ffb612",
-                    "espn_id": "24",
+                    "provider_id": "24",
                 },
             )
             row = cur.fetchone()
