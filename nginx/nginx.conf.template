@@ -108,8 +108,7 @@ http {
         }
 
         # ── Image generation routes: cached + rate-limited ───────────────────
-        # Matches: /{league}/{away}/{home}/{kind}         (4-segment, e.g. NBA)
-        #          /{league}/{sport}/{away}/{home}/{kind} (5-segment, e.g. NCAA)
+        # Matches: /{league}/{away}/{home}/{kind}   (4-segment, e.g. /nba/..., /ncaaf/...)
         # kind ∈ {thumb, logo, poster} — mirrors the generator registry.
         # NOTE: if a new kind is added to the generator registry, add it here.
         location ~ ^/[^/]+/.+/(thumb|logo|poster)$ {
