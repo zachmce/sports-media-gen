@@ -446,12 +446,12 @@ async def test_seed_upsert_preserves_logo_variants(
                 with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT logo_variants, COUNT(*) AS row_count
+                        SELECT t.logo_variants, COUNT(*) AS row_count
                         FROM teams t
                         JOIN leagues l ON l.id = t.league_id
                         WHERE l.slug = %(league)s
                           AND t.slug = %(slug)s
-                        GROUP BY logo_variants
+                        GROUP BY t.logo_variants
                         """,
                         {"league": league_slug, "slug": lakers_slug},
                     )
@@ -509,7 +509,7 @@ async def test_seed_upsert_preserves_logo_variants(
                 with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT logo_variants FROM teams t
+                        SELECT t.logo_variants FROM teams t
                         JOIN leagues l ON l.id = t.league_id
                         WHERE l.slug = %(league)s
                           AND t.slug = %(slug)s
