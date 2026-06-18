@@ -513,3 +513,110 @@ def test_svg_variant_not_selected_by_loader() -> None:
     assert cached_bytes.startswith(b"\x89PNG"), (
         f"Expected PNG magic header in cached bytes (D-19). Got {cached_bytes[:4]!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 16: Rookie complex-tag gate + fetch_teams("milb-rookie") tests
+# ---------------------------------------------------------------------------
+# These tests reference _MILB_COMPLEX_TAG_IDS and the Rookie provider branch,
+# both of which land in Plan 02 (providers/mlb.py).  They are intentionally
+# RED until Plan 02 merges.  The per-function importorskip keeps ESPN tests
+# collecting/passing in the interim.
+# ---------------------------------------------------------------------------
+
+
+def test_milb_complex_tag_ids_is_gate() -> None:
+    """D-03 / T-i3r-01: _MILB_COMPLEX_TAG_IDS is the SSRF-safe complex-tag gate.
+
+    Only the 3 known league.id integers (130=DSL, 121=ACL, 124=FCL) are keys.
+    An unknown id returns None via .get() — the fixed-dict lookup prevents
+    API-supplied integers from producing unexpected tag strings that could
+    contaminate slug/alias derivation.
+    Mirrors test_ncaa_sportbanner_sports_is_gate (T-i3r-01 pattern).
+    """
+    _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
+    _MILB_COMPLEX_TAG_IDS: dict[int, str] = _mlb._MILB_COMPLEX_TAG_IDS  # type: ignore[attr-defined]
+
+    assert set(_MILB_COMPLEX_TAG_IDS.keys()) == {130, 121, 124}
+    assert _MILB_COMPLEX_TAG_IDS[130] == "dsl"  # Dominican Summer League
+    assert _MILB_COMPLEX_TAG_IDS[121] == "acl"  # Arizona Complex League
+    assert _MILB_COMPLEX_TAG_IDS[124] == "fcl"  # Florida Complex League
+    assert _MILB_COMPLEX_TAG_IDS.get(999) is None  # unknown id → no tag (T-i3r-01)
+
+
+def test_mlb_rookie_fetch_teams_returns_provider_teams(httpx_mock: Any) -> None:
+    """MILB-07: fetch_teams("milb-rookie") maps DSL/ACL/FCL teams to ProviderTeam.
+
+    Verifies:
+    - At least one team per complex (DSL/ACL/FCL) returned.
+    - DSL team slug starts with "dsl-" (complex-tag prefix derivation).
+    - DSL team extra_aliases contains at least one entry with "dsl".
+    - logo_url ends with ".svg" (D-19 inherited by Rookie path).
+    Uses mlb_rookie_response.json fixture (7 teams across DSL/ACL/FCL).
+    """
+    import asyncio
+    import re as _re
+
+    # Skip early (before registering mocks) if libcairo2 is absent locally.
+    # Palette extraction requires cairosvg which raises OSError (not ImportError)
+    # when libcairo2.so.2 is missing — same guard pattern as test_svg_raster.py.
+    try:
+        import cairosvg as _cs  # type: ignore[import-untyped]  # noqa: F401
+    except OSError:
+        pytest.skip("libcairo2 not installed locally — skipping raster-dependent test")
+
+    _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
+    _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
+    _MILB_SPORT_IDS: dict[str, int] = _mlb._MILB_SPORT_IDS  # type: ignore[attr-defined]
+
+    from matchup_thumbs.settings import settings as _settings
+
+    fixture_path = Path(__file__).parent / "fixtures" / "mlb_rookie_response.json"
+    fixture_data: dict[str, Any] = json.loads(fixture_path.read_text())
+    svg_fixture_bytes = (
+        Path(__file__).parent / "fixtures" / "mlb_512.svg"
+    ).read_bytes()
+
+    sport_id = _MILB_SPORT_IDS["milb-rookie"]
+    stats_url = (
+        f"{_settings.mlb_statsapi_base_url}/api/v1/teams"
+        f"?sportId={sport_id}&activeStatus=Y"
+    )
+    # Mock the MLB Stats API Rookie response
+    httpx_mock.add_response(url=stats_url, json=fixture_data)
+
+    # Mock all per-team SVG CDN fetches with the offline fixture.
+    # is_reusable=True so a single registration matches all 7 SVG GETs.
+    httpx_mock.add_response(
+        url=_re.compile(r"https://www\.mlbstatic\.com/team-logos/\d+\.svg"),
+        content=svg_fixture_bytes,
+        is_reusable=True,
+    )
+
+    import httpx as _httpx
+
+    async def _run() -> list[Any]:
+        async with _httpx.AsyncClient() as client:
+            provider = _MLBStatsProvider()
+            return await provider.fetch_teams(client, "milb-rookie")
+
+    teams = asyncio.run(_run())
+    assert len(teams) >= 3, (
+        f"Expected at least 3 Rookie teams (one per complex), got {len(teams)}"
+    )
+
+    # Find a DSL team — verify slug prefix (D-05) and extra_aliases (D-06)
+    dsl_team = next((t for t in teams if t.slug.startswith("dsl-")), None)
+    assert dsl_team is not None, (
+        "No DSL team found with slug starting 'dsl-'. "
+        "Expected _derive_rookie_slug to emit 'dsl-{stripped}' slugs (D-05)."
+    )
+    assert any("dsl" in a for a in dsl_team.extra_aliases), (
+        f"Expected at least one extra_alias containing 'dsl' on DSL team. "
+        f"Got extra_aliases={dsl_team.extra_aliases!r} (D-06: prefixed alias variants)."
+    )
+    # D-19 inherited: Rookie logo_url is also the SVG primary mark
+    assert dsl_team.logo_url is not None
+    assert dsl_team.logo_url.endswith(".svg"), (
+        f"Expected logo_url ending with '.svg' (D-19), got {dsl_team.logo_url!r}"
+    )
