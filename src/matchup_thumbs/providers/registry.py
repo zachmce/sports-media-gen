@@ -32,8 +32,8 @@ _mlb: MLBStatsProvider = MLBStatsProvider()
 # ---------------------------------------------------------------------------
 # LEAGUE_REGISTRY: slug → DataProvider (D-09)
 # ---------------------------------------------------------------------------
-# All 6 ESPN slugs map to the ESPN singleton; the 4 MiLB slugs map to the
-# shared MLBStatsProvider singleton.  KNOWN_LEAGUES auto-derives to 10 (D-16).
+# All 6 ESPN slugs map to the ESPN singleton; the 5 MiLB slugs map to the
+# shared MLBStatsProvider singleton.  KNOWN_LEAGUES auto-derives to 11 (D-16).
 LEAGUE_REGISTRY: dict[str, DataProvider] = {
     "nba": _espn,
     "nfl": _espn,
@@ -45,6 +45,7 @@ LEAGUE_REGISTRY: dict[str, DataProvider] = {
     "milb-aa": _mlb,  # Phase 15 — Double-A
     "milb-high-a": _mlb,  # Phase 15 — High-A
     "milb-single-a": _mlb,  # Phase 15 — Single-A
+    "milb-rookie": _mlb,  # Phase 16 — Rookie (DSL/ACL/FCL, sportId=16)
 }
 
 # ---------------------------------------------------------------------------
@@ -54,6 +55,6 @@ LEAGUE_REGISTRY: dict[str, DataProvider] = {
 # that reaches a provider method must first be in KNOWN_LEAGUES, and
 # KNOWN_LEAGUES tracks the registry — so future providers are automatically
 # gated without any manual sync step.
-# KNOWN_LEAGUES now auto-derives to 10 slugs — SSRF gate + resolver scoping
+# KNOWN_LEAGUES now auto-derives to 11 slugs — SSRF gate + resolver scoping
 # extends automatically (D-10, D-16).
 KNOWN_LEAGUES: frozenset[str] = frozenset(LEAGUE_REGISTRY.keys())
