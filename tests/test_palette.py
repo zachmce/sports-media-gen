@@ -134,6 +134,24 @@ class TestSolidColor:
             c in "0123456789abcdef" for c in primary
         ), f"Expected valid hex chars, got {primary!r}"
 
+    def test_max_channel_clamps_to_ff_not_104(self) -> None:
+        """A 255 channel must clamp to 'ff', not overflow to '104' (7-char hex bug).
+
+        round(255/10)*10 == 260 → f"{260:02x}" == "104" → malformed "#1045000".
+        Regression for the 6 MiLB teams (e.g. las-vegas-aviators) that produced
+        invalid 7-digit colours before the min(255, …) clamp.
+        """
+        # Pure red with a maxed R channel (255) — must quantize-clamp to "ff0000".
+        img = _solid_rgba((255, 0, 0, 255))
+        primary, secondary = extract_palette(img)
+        for value in (primary, secondary):
+            assert value is not None
+            assert len(value) == 6, (
+                f"255-channel must yield 6-digit hex, got {value!r} "
+                "(clamp-to-255 regression)"
+            )
+        assert primary == "ff0000", f"Expected 'ff0000', got {primary!r}"
+
     def test_rgb_mode_input_is_handled(self) -> None:
         """RGB (no alpha) input is handled without error via RGBA conversion."""
         rgb_img = Image.new("RGB", (50, 50), (0, 40, 90))

@@ -92,10 +92,13 @@ def extract_palette(img: Image.Image) -> tuple[str | None, str | None]:
         if r > _WHITE_THRESHOLD and g > _WHITE_THRESHOLD and b > _WHITE_THRESHOLD:
             continue
 
-        # Quantize each channel to the nearest multiple of _QUANT.
-        qr = round(r / _QUANT) * _QUANT
-        qg = round(g / _QUANT) * _QUANT
-        qb = round(b / _QUANT) * _QUANT
+        # Quantize each channel to the nearest multiple of _QUANT, clamped to
+        # 255: round(255/10)*10 == 260, which would format as the 3-hex-digit
+        # "104" and yield a malformed 7-char colour (e.g. "#1045000"). Clamp so
+        # every channel stays a valid 8-bit value → exactly 2 hex digits.
+        qr = min(255, round(r / _QUANT) * _QUANT)
+        qg = min(255, round(g / _QUANT) * _QUANT)
+        qb = min(255, round(b / _QUANT) * _QUANT)
 
         key = (qr, qg, qb)
         color_counts[key] = color_counts.get(key, 0) + 1
