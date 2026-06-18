@@ -431,7 +431,7 @@ def main() -> None:
     """
     try:
         asyncio.run(_amain())
-    except (SystemExit, KeyboardInterrupt):
+    except SystemExit, KeyboardInterrupt:
         raise
     except Exception as exc:
         # Log the failure and exit non-zero (ESPN-05 / D-15)

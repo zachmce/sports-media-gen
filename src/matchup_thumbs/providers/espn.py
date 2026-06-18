@@ -119,9 +119,7 @@ class ESPNProvider:
             httpx.HTTPStatusError: on ESPN API 4xx/5xx after transport retries.
             pydantic.ValidationError: on unexpected ESPN response schema drift.
         """
-        response = await _espn_fetch_teams(
-            client, settings.espn_base_url, league_slug
-        )
+        response = await _espn_fetch_teams(client, settings.espn_base_url, league_slug)
         teams = response.sports[0].leagues[0].teams
         return [
             ProviderTeam(

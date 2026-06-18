@@ -17,6 +17,7 @@ import pytest
 # This keeps Wave 0 CI green while Plans 02-03 are not yet merged.
 providers_registry = pytest.importorskip("matchup_thumbs.providers.registry")
 
+from matchup_thumbs.espn.client import LEAGUE_ENDPOINTS  # noqa: E402 (guarded above)
 from matchup_thumbs.providers.espn import (  # noqa: E402
     _NCAA_SPORTBANNER_SPORTS,
     ESPNProvider,
@@ -26,8 +27,6 @@ from matchup_thumbs.providers.registry import (  # noqa: E402
     KNOWN_LEAGUES,
     LEAGUE_REGISTRY,
 )
-
-from matchup_thumbs.espn.client import LEAGUE_ENDPOINTS  # noqa: E402 (guarded above)
 
 # ---------------------------------------------------------------------------
 # Registry / KNOWN_LEAGUES invariants
