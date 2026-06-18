@@ -56,6 +56,15 @@ _MILB_SPORT_IDS: Final[dict[str, int]] = {
     "milb-single-a": 14,
 }
 
+# MiLB league shield (center "VS" slot). The MLB Stats API exposes no per-affiliate
+# league logo, so every MiLB level shares the single MiLB-wide mark — matching
+# game-thumbs' "use a higher-level shield" approach (D-23 reopened, user-approved
+# 2026-06-18). These are FIXED relative paths appended to the constant
+# settings.mlb_logos_base_url — no user/API string reaches the URL (SSRF-safe;
+# the _MILB_SPORT_IDS-membership gate still applies upstream).
+_MILB_SHIELD_LIGHT_PATH: Final[str] = "league-on-light/milb.svg"
+_MILB_SHIELD_DARK_PATH: Final[str] = "league-on-dark/milb.svg"
+
 
 def _derive_mlb_slug(location_name: str, team_name: str) -> str:
     """Derive a kebab-case slug from MLB locationName + teamName.
@@ -218,15 +227,57 @@ class MLBStatsProvider:
         client: httpx.AsyncClient,
         league_slug: str,
     ) -> ProviderLogoShield:
-        """MiLB affiliate levels have no standalone league logo in the MLB Stats API.
+        """Return the shared MiLB league shield for any affiliate level (D-23).
 
-        Returns an empty shield; seed.py will warm the league logo slot with the
-        placeholder PNG.  Acceptable for v2.0 (MISVG-FUT-01 / MICOL-FUT-01 deferred).
+        The MLB Stats API has no per-affiliate league logo, so all MiLB levels use
+        the single MiLB-wide mark fetched from the MLB CDN
+        (``{mlb_logos_base_url}/league-on-light/milb.svg`` + ``-dark`` variant).
+        The SVG is rasterized to PNG off the event loop (cairosvg is CPU-bound) so
+        seed.py can warm ``leaguelogo:{level}:{variant}`` with Pillow-readable bytes.
+
+        SSRF: the URL is built only from the constant ``settings.mlb_logos_base_url``
+        plus the fixed ``_MILB_SHIELD_*_PATH`` constants — no user/API string reaches
+        it. On any fetch/rasterize failure returns an empty shield so seed falls back
+        to the placeholder (degrade, never crash).
         """
-        await logger.adebug("mlb_league_shield_empty", league=league_slug)
+        light_url = f"{settings.mlb_logos_base_url}/{_MILB_SHIELD_LIGHT_PATH}"
+        dark_url = f"{settings.mlb_logos_base_url}/{_MILB_SHIELD_DARK_PATH}"
+        semaphore = asyncio.Semaphore(settings.espn_semaphore_size)
+
+        async def _fetch_raster(url: str) -> bytes | None:
+            try:
+                # Lazy import: cairosvg raises OSError without libcairo2 (skipif
+                # pattern); deferring keeps the provider importable regardless.
+                from ..svg import rasterize_svg_if_needed
+
+                raw = await fetch_logo_bytes(
+                    client, url, semaphore, settings.espn_jitter_max
+                )
+                # Rasterize the (wide, aspect-preserved) MiLB mark off the event loop.
+                return await anyio.to_thread.run_sync(rasterize_svg_if_needed, raw)
+            except Exception as exc:
+                await logger.awarning(
+                    "mlb_league_shield_fetch_failed",
+                    league=league_slug,
+                    url=url,
+                    error=str(exc),
+                )
+                return None
+
+        bytes_default = await _fetch_raster(light_url)
+        bytes_dark = await _fetch_raster(dark_url)
+
+        if bytes_default is None:
+            # No usable shield — empty shield → seed warms the placeholder (no crash).
+            await logger.awarning("mlb_league_shield_unavailable", league=league_slug)
+            return ProviderLogoShield(
+                logo_url=None, variant_map={}, bytes_default=None, bytes_dark=None
+            )
+
+        await logger.adebug("mlb_league_shield_ok", league=league_slug, url=light_url)
         return ProviderLogoShield(
-            logo_url=None,
-            variant_map={},
-            bytes_default=None,
-            bytes_dark=None,
+            logo_url=light_url,
+            variant_map={"default": light_url, "dark": dark_url},
+            bytes_default=bytes_default,
+            bytes_dark=bytes_dark,
         )

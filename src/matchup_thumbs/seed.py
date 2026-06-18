@@ -351,6 +351,17 @@ async def run(
             teams=len(teams),
         )
 
+    # Invalidate the rendered-image cache after seeding.  rendered:{...} keys are
+    # keyed by request params + render_version — NOT by team data — so a re-seed
+    # that changes team colours/logos would otherwise keep serving stale renders
+    # until their TTL.  Clearing them here makes a re-seed take effect immediately
+    # (removes the manual `redis-cli --scan --pattern 'rendered:*' | xargs DEL` step).
+    flushed = 0
+    async for render_key in redis.scan_iter(match="rendered:*"):
+        await redis.delete(render_key)
+        flushed += 1
+    await logger.ainfo("seed_rendered_cache_flushed", keys=flushed)
+
 
 async def _resolve_logo_bytes(
     http_client: httpx.AsyncClient,
