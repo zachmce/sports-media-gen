@@ -134,10 +134,9 @@ def test_alembic_upgrade_head() -> None:
     # The module fixture already ran upgrade; just verify the current revision.
     result = _run_alembic("current")
     assert result.returncode == 0, f"alembic current failed:\n{result.stderr}"
-    # Updated for Phase 15: migration 0005 (MiLB leagues) extends the chain.
-    # Wave 0 note: this assertion will be RED until migration 0005 file lands.
-    assert "0005" in result.stdout or "0005" in result.stderr, (
-        f"Expected revision 0005 to be current.\n"
+    # Updated for Phase 16: migration 0006 (milb-rookie league) is now head.
+    assert "0006" in result.stdout or "0006" in result.stderr, (
+        f"Expected revision 0006 to be current.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
@@ -498,6 +497,59 @@ def test_migration_0005_chains_off_0004() -> None:
     assert down_revision_node.value == "0004", (
         f"Expected down_revision='0004', got '{down_revision_node.value}' "
         "(Pitfall 2: chain must be 0001→0002→0003→0004→0005, not skip 0004)"
+    )
+
+
+def test_migration_0006_chains_off_0005() -> None:
+    """Migration 0006 declares down_revision='0005' (chain integrity).
+
+    Does NOT require live Postgres — reads the migration file directly so it
+    always runs and guards against revision-chain breakage.
+    Mirrors test_migration_0005_chains_off_0004.
+
+    Chain must be: 0001 → 0002 → 0003 → 0004 → 0005 → 0006.
+    """
+    import ast
+    import pathlib
+
+    migration_path = (
+        pathlib.Path(__file__).parent.parent
+        / "migrations"
+        / "versions"
+        / "0006_milb_rookie_league.py"
+    )
+    assert migration_path.exists(), (
+        f"Migration file not found: {migration_path}. "
+        "Create migrations/versions/0006_milb_rookie_league.py in Phase 16."
+    )
+
+    tree = ast.parse(migration_path.read_text())
+    assigns = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            assigns[node.target.id] = node.value
+
+    revision_node = assigns.get("revision")
+    down_revision_node = assigns.get("down_revision")
+
+    assert revision_node is not None, "revision not found in 0006 migration"
+    assert down_revision_node is not None, "down_revision not found in 0006 migration"
+
+    assert isinstance(revision_node, ast.Constant), "revision must be a string literal"
+    assert isinstance(down_revision_node, ast.Constant), (
+        "down_revision must be a string literal"
+    )
+
+    assert revision_node.value == "0006", (
+        f"Expected revision='0006', got '{revision_node.value}'"
+    )
+    assert down_revision_node.value == "0005", (
+        f"Expected down_revision='0005', got '{down_revision_node.value}' "
+        "(chain must be 0001→0002→0003→0004→0005→0006, not skip 0005)"
     )
 
 
