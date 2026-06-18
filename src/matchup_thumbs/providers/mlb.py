@@ -122,7 +122,12 @@ async def _extract_team_colors(
         primary_hex, secondary_hex = extract_palette(logo_img)
         return primary_hex, secondary_hex
     except Exception as exc:
-        await logger.awarning(
+        # aerror (not awarning) so transient mlbstatic.com CDN flakiness during
+        # seed is not lost in log noise (WR-07).  Read-timeout retry recovery is
+        # intentionally out of scope here: it is handled only by the shared
+        # transport's connection retries (AsyncHTTPTransport(retries=…)); we do
+        # NOT broaden the shared espn/client.py tenacity predicate (Phase-15 scope).
+        await logger.aerror(
             "mlb_palette_extraction_failed",
             url=svg_url,
             team=team_slug,
@@ -293,7 +298,12 @@ class MLBStatsProvider:
                 # Rasterize the (wide, aspect-preserved) MiLB mark off the event loop.
                 return await anyio.to_thread.run_sync(rasterize_svg_if_needed, raw)
             except Exception as exc:
-                await logger.awarning(
+                # aerror (not awarning) so transient MLB CDN flakiness during
+                # seed is not lost in noise (WR-07).  Transport-timeout retry
+                # recovery is intentionally out of scope (handled only by the
+                # shared transport's connection retries; we do not broaden the
+                # shared espn/client.py tenacity predicate).
+                await logger.aerror(
                     "mlb_league_shield_fetch_failed",
                     league=league_slug,
                     url=url,
