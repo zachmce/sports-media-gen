@@ -51,6 +51,33 @@ _SVG_RASTER_SIZE: int = 500
 # This is the supported control in cairosvg 2.x — there is no url_fetcher param.
 _SVG_UNSAFE: bool = False
 
+# Transparent margin added around the rasterized mark, as a fraction of width per
+# side.  MLB primary marks fill their viewBox edge-to-edge (content bbox == canvas),
+# so without a margin the mark composites with straight hard-cropped edges AND the
+# drop shadow (offset+blur, applied later by the generator) is clipped to a straight
+# line at the raster rectangle.  ~8% per side gives the downscaled shadow room and
+# keeps the mark off the edge.  ESPN PNGs skip this path entirely (no-op).
+_SVG_RASTER_PAD_FRAC: float = 0.08
+
+
+def _pad_transparent(png_bytes: bytes) -> bytes:
+    """Re-encode a rasterized PNG with a transparent margin around its content.
+
+    Pads by ``_SVG_RASTER_PAD_FRAC`` of the width on every side so an edge-filling
+    mark gains breathing room (no hard-cropped mark edges; room for the generator's
+    drop shadow).  Pure CPU work — callers already wrap rasterization off the loop.
+    """
+    img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    pad = round(img.width * _SVG_RASTER_PAD_FRAC)
+    if pad <= 0:
+        return png_bytes
+    size = (img.width + 2 * pad, img.height + 2 * pad)
+    padded = Image.new("RGBA", size, (0, 0, 0, 0))
+    padded.alpha_composite(img, (pad, pad))
+    buf = io.BytesIO()
+    padded.save(buf, format="PNG")
+    return buf.getvalue()
+
 
 def rasterize_svg_if_needed(raw: bytes) -> bytes:
     """Rasterize SVG bytes to bounded-width PNG; pass through all other formats.
@@ -70,8 +97,8 @@ def rasterize_svg_if_needed(raw: bytes) -> bytes:
         raw: Raw bytes from a CDN response (any logo format).
 
     Returns:
-        PNG bytes (transparent background, RGBA) if ``raw`` was SVG; otherwise
-        ``raw`` unchanged.
+        PNG bytes (transparent background, RGBA, with a transparent margin) if
+        ``raw`` was SVG; otherwise ``raw`` unchanged.
     """
     stripped = raw.lstrip()
     if stripped.startswith(b"<"):
@@ -80,7 +107,9 @@ def rasterize_svg_if_needed(raw: bytes) -> bytes:
             output_width=_SVG_RASTER_SIZE,
             unsafe=_SVG_UNSAFE,
         )
-        return result
+        # Add a transparent margin so the edge-filling MLB mark isn't hard-cropped
+        # and the downstream drop shadow has room to render (no straight clip).
+        return _pad_transparent(result)
     return raw
 
 

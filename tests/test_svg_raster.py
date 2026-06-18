@@ -22,6 +22,19 @@ import sys
 import types
 
 import pytest
+from PIL import Image
+
+
+def _real_png_bytes() -> bytes:
+    """A real, decodable PNG — SVG-detection stubs must return openable bytes
+    because rasterize_svg_if_needed now pads the raster (Image.open) before
+    returning."""
+    buf = io.BytesIO()
+    Image.new("RGBA", (8, 8), (10, 20, 30, 255)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+_REAL_PNG: bytes = _real_png_bytes()
 
 # ---------------------------------------------------------------------------
 # Availability guard
@@ -185,7 +198,7 @@ class TestSVGDetection:
             assert bytestring is not None
             call_log.append(bytestring)
             # Return fake PNG bytes so the caller doesn't crash.
-            return _PNG_MAGIC + b"\r\n\x1a\nFAKE"
+            return _REAL_PNG
 
         stub = types.ModuleType("cairosvg")
         stub.svg2png = _stub_svg2png  # type: ignore[attr-defined]
@@ -217,7 +230,7 @@ class TestSVGDetection:
         ) -> bytes:
             assert bytestring is not None
             call_log.append(bytestring)
-            return _PNG_MAGIC + b"\r\n\x1a\nFAKE"
+            return _REAL_PNG
 
         stub = types.ModuleType("cairosvg")
         stub.svg2png = _stub_svg2png  # type: ignore[attr-defined]
@@ -245,7 +258,7 @@ class TestSVGDetection:
         ) -> bytes:
             assert bytestring is not None
             call_log.append(bytestring)
-            return _PNG_MAGIC + b"\r\n\x1a\nFAKE"
+            return _REAL_PNG
 
         stub = types.ModuleType("cairosvg")
         stub.svg2png = _stub_svg2png  # type: ignore[attr-defined]
@@ -288,7 +301,7 @@ class TestSSRFGate:
             unsafe: object = "MISSING",
         ) -> bytes:
             received_unsafe.append(unsafe)
-            return _PNG_MAGIC + b"\r\n\x1a\nFAKE"
+            return _REAL_PNG
 
         stub = types.ModuleType("cairosvg")
         stub.svg2png = _stub_svg2png  # type: ignore[attr-defined]
@@ -325,18 +338,48 @@ class TestRasterization:
         assert result[:4] == _PNG_MAGIC, "Expected PNG magic header in output"
 
     def test_rasterized_width_bounded_by_svg_raster_size(self) -> None:
-        """Output width == _SVG_RASTER_SIZE regardless of SVG size (T-15-SVG-BOMB)."""
-        from matchup_thumbs.svg import _SVG_RASTER_SIZE, rasterize_svg_if_needed
+        """Output width == _SVG_RASTER_SIZE + the transparent pad (T-15-SVG-BOMB).
+
+        The render-bomb bound caps the cairosvg output at _SVG_RASTER_SIZE; the
+        rasterizer then adds a fixed transparent margin (_SVG_RASTER_PAD_FRAC per
+        side), so the final width is the bounded raster plus 2× the pad — still a
+        fixed, bounded value the caller cannot inflate.
+        """
+        from matchup_thumbs.svg import (
+            _SVG_RASTER_PAD_FRAC,
+            _SVG_RASTER_SIZE,
+            rasterize_svg_if_needed,
+        )
 
         svg_bytes = _load_svg_fixture()
         png_bytes = rasterize_svg_if_needed(svg_bytes)
         from PIL import Image
 
         img = Image.open(io.BytesIO(png_bytes))
-        assert img.width == _SVG_RASTER_SIZE, (
-            f"Expected width {_SVG_RASTER_SIZE}, got {img.width} — "
-            "render-bomb bound not enforced"
+        expected_pad = round(_SVG_RASTER_SIZE * _SVG_RASTER_PAD_FRAC)
+        expected_width = _SVG_RASTER_SIZE + 2 * expected_pad
+        assert img.width == expected_width, (
+            f"Expected padded width {expected_width}, got {img.width} — "
+            "render-bomb bound + transparent pad not enforced"
         )
+
+    def test_rasterized_mark_has_transparent_margin(self) -> None:
+        """The padded raster's outer border is fully transparent (no edge-crop).
+
+        The fixture mark fills its viewBox; after padding, the 1px outer frame must
+        be transparent so the mark never composites with a straight hard edge and
+        the drop shadow has room to render.
+        """
+        from matchup_thumbs.svg import rasterize_svg_if_needed
+
+        png_bytes = rasterize_svg_if_needed(_load_svg_fixture())
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        w, h = img.size
+        # All four corners must be transparent (alpha == 0).
+        for xy in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]:
+            assert img.getpixel(xy)[3] == 0, f"Expected transparent margin at {xy}"
 
     def test_rasterize_svg_to_square_png_produces_square(self) -> None:
         """rasterize_svg_to_square_png produces a square image."""
