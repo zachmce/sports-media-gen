@@ -429,17 +429,46 @@ class TestRasterization:
             f"Expected square output, got {img.width}x{img.height}"
         )
 
-    def test_ssrf_svg_with_external_image_does_not_fetch(self) -> None:
-        """An SVG with <image href='http://…'> rasterizes in safe mode without
-        fetching the external resource (T-15-SVG-SSRF).
+    def test_ssrf_svg_with_external_image_does_not_fetch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An SVG with <image href='http://…'> makes ZERO outbound calls under
+        unsafe=False (T-15-SVG-SSRF) — a real no-fetch test, not a smoke test.
 
-        With unsafe=False, cairosvg ignores the external reference rather than
-        making an outbound request — so rasterization succeeds and yields a PNG,
-        and no network call is made. We assert success + PNG output (a hung/raised
-        call would indicate cairosvg attempted the fetch)."""
+        Empirically verified: with unsafe=False cairosvg makes zero outbound
+        calls for an external <image href>; with unsafe=True it calls
+        urllib.request.urlopen. So we monkeypatch BOTH urllib.request.urlopen
+        and socket.socket.connect to record-and-raise, then call the real
+        rasterizer and assert (a) it returns valid PNG bytes and (b) no fetch
+        was ever attempted (the recorded-attempts list is empty). A build that
+        DID fetch would also produce a PNG, so the magic-header check alone is
+        insufficient — it is kept here only as a secondary assertion (WR-04).
+        """
+        import socket
+        import urllib.request
+
         from matchup_thumbs.svg import rasterize_svg_if_needed
 
+        attempts: list[str] = []
+
+        def _record_urlopen(*args: object, **kwargs: object) -> object:
+            attempts.append(f"urlopen{args!r}")
+            raise AssertionError("unexpected outbound urlopen during safe rasterize")
+
+        def _record_connect(self: object, address: object) -> object:
+            attempts.append(f"socket.connect{address!r}")
+            raise AssertionError("unexpected socket.connect during safe rasterize")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _record_urlopen)
+        monkeypatch.setattr(socket.socket, "connect", _record_connect)
+
         result = rasterize_svg_if_needed(_SSRF_SVG)
+
+        assert attempts == [], (
+            f"Safe-mode rasterization must make ZERO outbound fetches; "
+            f"recorded attempts: {attempts}"
+        )
+        # Secondary: rasterization still succeeds (external ref ignored, not fetched).
         assert result[:4] == _PNG_MAGIC, (
             "Safe-mode rasterization of an SVG with an external <image> must "
             "still produce a PNG (external ref ignored, not fetched)"
