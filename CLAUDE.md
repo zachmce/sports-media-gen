@@ -6,7 +6,7 @@
 
 **matchup-thumbs**
 
-An HTTP service that generates sports matchup images — thumbnails (16:9), logos, and posters (2:3) — on the fly for arbitrary team pairings across many leagues. Given `(league, away, home, kind, style)` it composites team logos and colors into an image and returns it. Outputs are deterministic and aggressively cached at every tier. All team metadata and logos come from public ESPN APIs/CDN — no paid services. It is reimplemented in Python/FastAPI, inspired by `sethwv/game-thumbs`, and intended for personal/homelab use as a public open-source repo.
+An HTTP service that generates sports matchup images — thumbnails (16:9), logos, and posters (2:3) — on the fly for arbitrary team pairings across many leagues. Given `(league, away, home, kind, style)` it composites team logos and colors into an image and returns it. Outputs are deterministic and aggressively cached at every tier. All team metadata and logos come from free/public, key-free providers (ESPN, MLB Stats API, NCAA.com sportbanner) — no paid services. It is reimplemented in Python/FastAPI, inspired by `sethwv/game-thumbs`, and intended for personal/homelab use as a public open-source repo.
 
 ### Data sources
 

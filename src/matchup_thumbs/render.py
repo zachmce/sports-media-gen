@@ -308,7 +308,7 @@ async def _resolve_variant_logo(
     settings: Settings,
     *,
     league: str,
-    espn_id: str,
+    provider_id: str,
 ) -> tuple[Image.Image, float]:
     """Pick the best logo for the chosen background and return its measured contrast.
 
@@ -356,7 +356,7 @@ async def _resolve_variant_logo(
     await logger.awarning(
         "variant_contrast_recheck_fallback",
         league=league,
-        espn_id=espn_id,
+        provider_id=provider_id,
         variant=decision.recommended_variant,
         achieved_ratio=round(loaded_ratio, 3),
         default_ratio=round(default_ratio, 3),
@@ -373,7 +373,7 @@ async def _enforce_logo_contrast(
     settings: Settings,
     *,
     league: str,
-    espn_id: str,
+    provider_id: str,
 ) -> tuple[Image.Image, ContrastDecision]:
     """Resolve the best logo and escalate to an OUTLINE halo when still illegible.
 
@@ -385,7 +385,12 @@ async def _enforce_logo_contrast(
     returned with the decision untouched (no halo on crisp white-on-colour logos).
     """
     logo, achieved = await _resolve_variant_logo(
-        loaded_logo, default_logo, decision, settings, league=league, espn_id=espn_id
+        loaded_logo,
+        default_logo,
+        decision,
+        settings,
+        league=league,
+        provider_id=provider_id,
     )
     if (
         achieved < settings.min_contrast_ratio
@@ -394,7 +399,7 @@ async def _enforce_logo_contrast(
         await logger.awarning(
             "logo_contrast_outline_escalation",
             league=league,
-            espn_id=espn_id,
+            provider_id=provider_id,
             variant=decision.recommended_variant,
             achieved_ratio=round(achieved, 3),
             min_ratio=settings.min_contrast_ratio,
@@ -538,7 +543,7 @@ async def _render_and_encode(
         away_decision,
         settings,
         league=league,
-        espn_id=away["espn_id"],
+        provider_id=away["provider_id"],
     )
     home_logo_final, home_decision = await _enforce_logo_contrast(
         home_logo_final,
@@ -546,7 +551,7 @@ async def _render_and_encode(
         home_decision,
         settings,
         league=league,
-        espn_id=home["espn_id"],
+        provider_id=home["provider_id"],
     )
 
     # LEAGUE LOGO: blend seam colour, fetch logo_variants from DB, select variant,

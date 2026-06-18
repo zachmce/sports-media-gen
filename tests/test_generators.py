@@ -58,7 +58,7 @@ def _make_team(primary: str, secondary: str) -> dict[str, Any]:
         "primary_color": primary,
         "secondary_color": secondary,
         "logo_url": None,
-        "espn_id": "99",
+        "provider_id": "99",
         "logo_variants": None,
     }
 
