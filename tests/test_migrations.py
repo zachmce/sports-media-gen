@@ -45,9 +45,22 @@ _SKIP_REASON: str = (
 
 pg_required = pytest.mark.skipif(not _PG_AVAILABLE, reason=_SKIP_REASON)
 
-# Expected league slugs seeded by the migration
+# Expected league slugs seeded by all migrations through head.
+# Updated for Phase 15: 0005 inserts 4 MiLB league rows (D-18 permitted edit).
+# Wave 0 note: test_leagues_seeded will be RED until migration 0005 is applied.
 _EXPECTED_LEAGUES: frozenset[str] = frozenset(
-    {"nba", "nfl", "mlb", "nhl", "ncaaf", "ncaab"}
+    {
+        "nba",
+        "nfl",
+        "mlb",
+        "nhl",
+        "ncaaf",
+        "ncaab",
+        "milb-aaa",
+        "milb-aa",
+        "milb-high-a",
+        "milb-single-a",
+    }
 )
 
 
@@ -120,8 +133,10 @@ def test_alembic_upgrade_head() -> None:
     # The module fixture already ran upgrade; just verify the current revision.
     result = _run_alembic("current")
     assert result.returncode == 0, f"alembic current failed:\n{result.stderr}"
-    assert "0004" in result.stdout or "0004" in result.stderr, (
-        f"Expected revision 0004 to be current.\n"
+    # Updated for Phase 15: migration 0005 (MiLB leagues) extends the chain.
+    # Wave 0 note: this assertion will be RED until migration 0005 file lands.
+    assert "0005" in result.stdout or "0005" in result.stderr, (
+        f"Expected revision 0005 to be current.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
@@ -419,4 +434,93 @@ def test_migration_0003_leagues_logo_columns_exist() -> None:
     )
     assert logo_var_default is not None and "'{}'" in logo_var_default, (
         f"Expected server_default '{{}}' for logo_variants, got '{logo_var_default}'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Migration 0005 — MiLB affiliate level league rows (MILB-02)
+# ---------------------------------------------------------------------------
+
+
+def test_migration_0005_chains_off_0004() -> None:
+    """Migration 0005 declares down_revision='0004' (Pitfall 2: chain integrity).
+
+    Does NOT require live Postgres — reads the migration file directly so it
+    always runs and guards against revision-chain breakage.
+    Mirrors test_migration_0003_chains_off_0002.
+
+    Chain must be: 0001 → 0002 → 0003 → 0004 → 0005.
+    Wave 0 note: this test is RED until the 0005_milb_leagues.py file lands
+    (Phase 15 Wave 1).  Once the file exists with correct metadata, it turns GREEN.
+    """
+    import ast
+    import pathlib
+
+    migration_path = (
+        pathlib.Path(__file__).parent.parent
+        / "migrations"
+        / "versions"
+        / "0005_milb_leagues.py"
+    )
+    assert migration_path.exists(), (
+        f"Migration file not found: {migration_path}. "
+        "Create migrations/versions/0005_milb_leagues.py in Phase 15 Wave 1."
+    )
+
+    tree = ast.parse(migration_path.read_text())
+    # Alembic uses type-annotated assignments: revision: str = "0005"
+    # These are ast.AnnAssign nodes, not ast.Assign.
+    assigns = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            assigns[node.target.id] = node.value
+
+    revision_node = assigns.get("revision")
+    down_revision_node = assigns.get("down_revision")
+
+    assert revision_node is not None, "revision not found in 0005 migration"
+    assert down_revision_node is not None, "down_revision not found in 0005 migration"
+
+    # ast.Constant for string literals
+    assert isinstance(revision_node, ast.Constant), "revision must be a string literal"
+    assert isinstance(down_revision_node, ast.Constant), (
+        "down_revision must be a string literal"
+    )
+
+    assert revision_node.value == "0005", (
+        f"Expected revision='0005', got '{revision_node.value}'"
+    )
+    assert down_revision_node.value == "0004", (
+        f"Expected down_revision='0004', got '{down_revision_node.value}' "
+        "(Pitfall 2: chain must be 0001→0002→0003→0004→0005, not skip 0004)"
+    )
+
+
+@pg_required
+def test_migration_0005_milb_leagues_seeded() -> None:
+    """MILB-02: after upgrade head, all 4 MiLB affiliate level league rows exist.
+
+    Requires a live Postgres with migration 0005 applied (pg_required).
+    Wave 0 note: this test skips when Postgres is absent; it will also fail
+    until migration 0005 is written and applied (Phase 15 Wave 1).
+    """
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT slug FROM leagues
+            WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
+            ORDER BY slug
+            """
+        )
+        rows = cur.fetchall()
+
+    found = {row[0] for row in rows}
+    expected = {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a"}
+    assert found == expected, (
+        f"Expected MiLB league rows {expected} after migration 0005, got {found}. "
+        "Run 'alembic upgrade head' with migration 0005 applied."
     )

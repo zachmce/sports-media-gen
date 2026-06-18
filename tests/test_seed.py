@@ -1318,3 +1318,88 @@ async def _count_nba_rows(pool: Any) -> tuple[int, int]:
             alias_count: int = alias_row[0] if alias_row else 0
 
     return team_count, alias_count
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 Wave 0: MiLB seed scaffold (pg_required — skip without Postgres)
+# ---------------------------------------------------------------------------
+
+
+@pg_required
+async def test_milb_no_intra_level_alias_collisions() -> None:
+    """MILB-03 / D-10: no intra-level alias collisions across the 4 MiLB leagues.
+
+    Post-seed verification query (RESEARCH.md §Cross-Level Collision Analysis):
+        SELECT alias, league_id, COUNT(*) FROM team_aliases
+        WHERE league_id IN (SELECT id FROM leagues WHERE slug IN (<4 milb slugs>))
+        GROUP BY alias, league_id
+        HAVING COUNT(*) > 1;
+    Expected: 0 rows (zero intra-level duplicate aliases).
+
+    This test will skip when Postgres is absent (pg_required) and will also
+    skip gracefully when the MiLB leagues are not yet seeded (migration 0005
+    not applied + seed run not yet executed).  It turns GREEN once Wave 2 seed
+    job has run against a live database.
+    """
+    import os
+
+    raw_dsn = os.environ.get("POSTGRES_DSN", "").replace(
+        "postgresql+psycopg://", "postgresql://"
+    )
+    import psycopg as _psycopg
+
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        # First verify MiLB leagues are seeded (migration 0005 required)
+        cur.execute(
+            """
+                SELECT slug FROM leagues
+                WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
+                """
+        )
+        present_leagues = {row[0] for row in cur.fetchall()}
+
+    expected_milb = {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a"}
+    if present_leagues != expected_milb:
+        pytest.skip(
+            f"MiLB league rows not fully seeded yet (need {expected_milb}, "
+            f"got {present_leagues}). Run after migration 0005 + seed job."
+        )
+
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        # Check for any MiLB teams at all (seed may not have run yet)
+        cur.execute(
+            """
+                SELECT COUNT(*) FROM teams t
+                JOIN leagues l ON l.id = t.league_id
+                WHERE l.slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
+                """
+        )
+        team_count_row = cur.fetchone()
+        team_count: int = team_count_row[0] if team_count_row else 0
+
+    if team_count == 0:
+        pytest.skip(
+            "No MiLB teams seeded yet. Run seed job after migration 0005 lands."
+        )
+
+    # Actual collision check: any alias appearing > 1 time in the same league is a bug
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT alias, league_id, COUNT(*) AS cnt
+            FROM team_aliases
+            WHERE league_id IN (
+                SELECT id FROM leagues
+                WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
+            )
+            GROUP BY alias, league_id
+            HAVING COUNT(*) > 1
+            ORDER BY cnt DESC, alias
+            """
+        )
+        collision_rows = cur.fetchall()
+
+    assert not collision_rows, (
+        f"Intra-level alias collisions found (D-10 violation): {collision_rows}. "
+        "Each (alias, league_id) pair must be unique per the DB constraint."
+    )

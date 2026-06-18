@@ -261,71 +261,70 @@ def test_apply_outline_preserves_size() -> None:
     assert result.size == logo.size
 
 
-def test_apply_outline_halo_present() -> None:
-    """_apply_outline makes transparent border pixels opaque (halo ring) (D-07).
+def test_apply_outline_shadow_present() -> None:
+    """_apply_outline casts a soft shadow into the transparent border (D-07).
 
-    A small solid mark placed in the center of a transparent canvas should gain
-    a visible halo of opaque pixels around its original border after _apply_outline.
+    A small solid mark on a transparent canvas should gain a visible
+    semi-transparent shadow just outside its border (offset down-right) after
+    _apply_outline.
     """
     from matchup_thumbs.generators._outline import _apply_outline
 
-    # Build a logo: 10x10 opaque mark, surrounded by transparent padding on 30x30.
+    # Build a logo: 10x10 opaque mark at (10,10)-(19,19), transparent padding on 30x30.
     canvas = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
     inner = Image.new("RGBA", (10, 10), (200, 50, 50, 255))
     canvas.paste(inner, (10, 10))
 
     result = _apply_outline(canvas, background_rgb=(200, 50, 50))
 
-    # The corner pixel (0,0) is far from the mark; it may or may not be halo depending
-    # on radius. But a pixel adjacent to the mark border (e.g., (9,9)) should be opaque
-    # after dilation with _OUTLINE_DILATION_RADIUS >= 1.
-    adjacent_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
-    assert adjacent_pixel[3] > 0, (
-        "Expected pixel adjacent to mark to be opaque after halo dilation"
+    # (22,22) is just outside the mark (ends at 19) in the offset-shadow direction;
+    # it must pick up the soft shadow (alpha>0) after offset+blur.
+    shadow_pixel = result.getpixel((22, 22))  # type: ignore[assignment]
+    assert shadow_pixel[3] > 0, (
+        "Expected a soft shadow (alpha>0) just outside the mark border"
     )
 
 
-def test_apply_outline_halo_color_dark_background() -> None:
-    """On a dark (near-black) background, _apply_outline picks white halo (D-08)."""
+def test_apply_outline_shadow_color_dark_background() -> None:
+    """On a dark (near-black) background, the drop shadow is white (D-08).
+
+    The treatment is now a soft, offset (down-right), blurred, semi-transparent
+    drop shadow (not a hard opaque ring).  The mark occupies (10..109) in a
+    120x120 canvas; the shadow is offset by _SHADOW_OFFSET so it falls just
+    OUTSIDE the bottom-right of the mark.  Sample (112,112): shadow-only region.
+    """
     from matchup_thumbs.generators._outline import _apply_outline
 
-    # Near-black background → white has higher contrast than black
+    # Near-black background → white has higher contrast than black.
     dark_bg: tuple[int, int, int] = (10, 10, 10)
-    logo = _make_solid_logo((255, 255, 255))  # white mark (clearly different)
-    # Place mark in center to ensure adjacent pixels get halo
+    logo = _make_solid_logo((255, 255, 255))  # white mark
     result = _apply_outline(logo, background_rgb=dark_bg)
 
-    # Find an opaque pixel that is NOT part of the original mark (the halo ring).
-    # The original mark occupies (10..109, 10..109) in a 120x120 canvas (per
-    # _make_solid_logo). Check pixel (9, 9) — one pixel outside the mark; after
-    # dilation it should be white (255,255,255).
-    halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
-    # (9,9) is one pixel outside the mark; dilation MUST make it opaque halo.
-    # Assert unconditionally so a broken/zero-radius dilation fails loudly (WR-04).
-    assert halo_pixel[3] == 255, (
-        f"Expected opaque halo at (9,9), got alpha={halo_pixel[3]}"
+    # (112,112) is outside the mark (ends at 109) but inside the offset shadow.
+    shadow_pixel = result.getpixel((112, 112))  # type: ignore[assignment]
+    assert shadow_pixel[3] > 0, (
+        f"Expected a soft shadow (alpha>0) at (112,112), got alpha={shadow_pixel[3]}"
     )
-    r = halo_pixel[0]
-    assert r > 128, f"Expected white halo on dark background, got r={r}"
+    r = shadow_pixel[0]
+    assert r > 128, f"Expected white drop shadow on dark background, got r={r}"
 
 
-def test_apply_outline_halo_color_light_background() -> None:
-    """On a near-white background, _apply_outline picks black halo (D-08)."""
+def test_apply_outline_shadow_color_light_background() -> None:
+    """On a near-white background, the drop shadow is black (D-08)."""
     from matchup_thumbs.generators._outline import _apply_outline
 
-    # Near-white background → black has higher contrast than white
+    # Near-white background → black has higher contrast than white.
     light_bg: tuple[int, int, int] = (245, 245, 245)
     logo = _make_solid_logo((0, 0, 0))  # black mark
     result = _apply_outline(logo, background_rgb=light_bg)
 
-    # Check adjacent pixel after dilation — should be dark (halo is black)
-    halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
-    # Unconditional: dilation must make (9,9) opaque halo, else fail loudly (WR-04).
-    assert halo_pixel[3] == 255, (
-        f"Expected opaque halo at (9,9), got alpha={halo_pixel[3]}"
+    # (112,112): shadow-only region just outside the bottom-right of the mark.
+    shadow_pixel = result.getpixel((112, 112))  # type: ignore[assignment]
+    assert shadow_pixel[3] > 0, (
+        f"Expected a soft shadow (alpha>0) at (112,112), got alpha={shadow_pixel[3]}"
     )
-    r = halo_pixel[0]
-    assert r < 128, f"Expected black halo on light background, got r={r}"
+    r = shadow_pixel[0]
+    assert r < 128, f"Expected black drop shadow on light background, got r={r}"
 
 
 # ---------------------------------------------------------------------------
@@ -744,4 +743,165 @@ def test_league_logo_contrast_outline_path_produces_different_render() -> None:
     assert img_outline.tobytes() != img_none.tobytes(), (
         "Thumb with league logo OUTLINE treatment must differ from "
         "NONE treatment (BRAND-03)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 Wave 5: MiLB generator tests (MILB-05, D-20, 15-06)
+# ---------------------------------------------------------------------------
+
+
+def test_milb_colorless_team_renders() -> None:
+    """MILB-05 null-color safety net: generator renders when both team colors are None.
+
+    MiLB teams now have palette-extracted colors (D-20), but the neutral-grey
+    fallback must still engage when extraction yields None (e.g. all-transparent
+    logo, all-white logo, or cairosvg unavailable in a degraded environment).
+    This test keeps both colors as None to exercise the full MILB-05 path.
+
+    Kept as the safety-net test (D-18: no render_version change); the new colored
+    path is covered by test_milb_colored_team_renders below (D-20).
+    """
+    from matchup_thumbs.generators._color import NULL_PRIMARY as _NULL_PRIMARY
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+
+    # MiLB-style teams with no colors (e.g. palette extraction failed → MILB-05).
+    # Updated logo_variants to D-21 format (spot + svg keys for provenance).
+    mud_hens: dict[str, Any] = {
+        "id": 1,
+        "league_id": 99,
+        "slug": "toledo-mud-hens",
+        "display_name": "Toledo Mud Hens",
+        "abbreviation": "TOL",
+        "primary_color": None,  # null-color path — MILB-05 safety net
+        "secondary_color": None,
+        "logo_url": "https://www.mlbstatic.com/team-logos/512.svg",  # D-19
+        "provider_id": "512",
+        "logo_variants": {  # D-21: both spot + svg provenance keys
+            "spot": "https://midfield.mlbstatic.com/v1/team/512/spots/500",
+            "svg": "https://www.mlbstatic.com/team-logos/512.svg",
+        },
+    }
+    clippers_aaa: dict[str, Any] = {
+        "id": 2,
+        "league_id": 99,
+        "slug": "columbus-clippers",
+        "display_name": "Columbus Clippers",
+        "abbreviation": "COL",
+        "primary_color": None,
+        "secondary_color": None,
+        "logo_url": "https://www.mlbstatic.com/team-logos/564.svg",  # D-19
+        "provider_id": "564",
+        "logo_variants": {
+            "spot": "https://midfield.mlbstatic.com/v1/team/564/spots/500",
+            "svg": "https://www.mlbstatic.com/team-logos/564.svg",
+        },
+    }
+
+    # Simulate the contrast engine's null-color decision path (CTR-05):
+    # when both colors are None, the render layer produces a grey decision.
+    assets = fixture_decoded_assets()
+    assets["away_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+    assets["home_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+
+    # Must not raise; result must be correct canvas size (MILB-05)
+    img = generate_thumb_style0(mud_hens, clippers_aaa, assets)
+    assert img.size == (1280, 720), (
+        f"Expected 1280×720, got {img.size!r} for MiLB colorless render"
+    )
+
+    # Top-left pixel (solidly in away colour band) must be the grey fallback
+    top_left = img.getpixel((0, 0))
+    assert top_left[:3] == _NULL_PRIMARY, (
+        f"Expected neutral-grey {_NULL_PRIMARY!r} at (0,0) for colorless MiLB team, "
+        f"got {top_left[:3]!r}"
+    )
+
+
+def test_milb_colored_team_renders() -> None:
+    """D-20: generator renders a non-grey background when MiLB team has palette colors.
+
+    Post-UAT (15-06): MiLB teams now carry palette-extracted primary/secondary
+    colors derived from their rasterized SVG primary mark.  This test verifies
+    that a MiLB-style team with a real bare-hex primary_color (e.g. Toledo Mud
+    Hens navy "002b5c") produces a colored background that is visually distinct
+    from the neutral-grey NULL_PRIMARY fallback — proving team-colored backgrounds
+    now engage for MiLB.
+
+    No golden image used (D-22: no render_version bump; ESPN goldens unchanged).
+    """
+    from matchup_thumbs.generators._color import NULL_PRIMARY as _NULL_PRIMARY
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+
+    # Toledo Mud Hens with palette-extracted colors (D-20 representative values).
+    # primary_color is a bare 6-digit hex string — seed.py would normalise to
+    # '#002b5c' before DB storage; the generator receives the '#'-prefixed form
+    # from the DB.  The team dict (from resolver) carries '#'-prefixed strings.
+    mud_hens_colored: dict[str, Any] = {
+        "id": 1,
+        "league_id": 99,
+        "slug": "toledo-mud-hens",
+        "display_name": "Toledo Mud Hens",
+        "abbreviation": "TOL",
+        "primary_color": "#002b5c",  # D-20: navy blue (Toledo palette)
+        "secondary_color": "#fdb913",  # D-20: gold
+        "logo_url": "https://www.mlbstatic.com/team-logos/512.svg",  # D-19
+        "provider_id": "512",
+        "logo_variants": {  # D-21: both spot + svg provenance keys
+            "spot": "https://midfield.mlbstatic.com/v1/team/512/spots/500",
+            "svg": "https://www.mlbstatic.com/team-logos/512.svg",
+        },
+    }
+    durham_bulls_colored: dict[str, Any] = {
+        "id": 2,
+        "league_id": 99,
+        "slug": "durham-bulls",
+        "display_name": "Durham Bulls",
+        "abbreviation": "DUR",
+        "primary_color": "#1b3a6b",  # D-20: Durham navy (representative)
+        "secondary_color": "#c8102e",  # D-20: Durham red
+        "logo_url": "https://www.mlbstatic.com/team-logos/234.svg",  # D-19
+        "provider_id": "234",
+        "logo_variants": {
+            "spot": "https://midfield.mlbstatic.com/v1/team/234/spots/500",
+            "svg": "https://www.mlbstatic.com/team-logos/234.svg",
+        },
+    }
+
+    # Colored MiLB decision: navy blue background (not NULL_PRIMARY grey).
+    navy_rgb: tuple[int, int, int] = (0, 43, 92)  # #002b5c
+    assets_colored = fixture_decoded_assets()
+    assets_colored["away_decision"] = make_decision(background_rgb=navy_rgb)
+    assets_colored["home_decision"] = make_decision(background_rgb=navy_rgb)
+
+    # Also render the null-color version for comparison (proves distinct output).
+    assets_grey = fixture_decoded_assets()
+    assets_grey["away_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+    assets_grey["home_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+
+    img_colored = generate_thumb_style0(
+        mud_hens_colored, durham_bulls_colored, assets_colored
+    )
+    img_grey = generate_thumb_style0(
+        mud_hens_colored, durham_bulls_colored, assets_grey
+    )
+
+    assert img_colored.size == (1280, 720), (
+        f"Expected 1280×720, got {img_colored.size!r} for colored MiLB render"
+    )
+
+    # Top-left pixel (solidly in away colour band) must be the team color, not grey.
+    top_left = img_colored.getpixel((0, 0))
+    assert top_left[:3] == navy_rgb, (
+        f"Expected navy {navy_rgb!r} at (0,0) for colored MiLB team (D-20), "
+        f"got {top_left[:3]!r}"
+    )
+    # And it must differ from the grey fallback — confirms colored backgrounds engage.
+    assert top_left[:3] != _NULL_PRIMARY, (
+        f"Colored MiLB team background must NOT be NULL_PRIMARY grey {_NULL_PRIMARY!r} "
+        f"(D-20 — team colors must engage). Got {top_left[:3]!r}"
+    )
+    # The colored render must produce a different image from the grey render (D-20).
+    assert img_colored.tobytes() != img_grey.tobytes(), (
+        "Colored MiLB render must differ from grey fallback render (D-20)"
     )

@@ -8,10 +8,11 @@ def test_settings_loads_from_env(test_settings: Settings) -> None:
     assert "matchup" in str(test_settings.postgres_dsn)
 
 
-def test_render_version_is_4() -> None:
-    """render_version is 4 — bumped from 3 to invalidate all v1.2.x cached renders.
+def test_render_version_is_5() -> None:
+    """render_version is 5 — bumped from 4 to invalidate all v1.3.x cached renders.
 
-    Asserts CACHE-08: the v1.3 bump (VS→logo + poster seam) is reflected in the
-    settings model so the render key is :v4, making all prior :v3 keys unreachable.
+    Asserts CACHE-08: the v2.0 bump (soft drop shadow replaces the logo halo) is
+    reflected in the settings model so the render key is :v5, making all prior :v4
+    keys unreachable.
     """
-    assert Settings().render_version == 4
+    assert Settings().render_version == 5
