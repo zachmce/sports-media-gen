@@ -443,7 +443,7 @@ def test_migration_0003_leagues_logo_columns_exist() -> None:
 
 
 def test_migration_0005_chains_off_0004() -> None:
-    """Pitfall 2 (RESEARCH): migration 0005 declares down_revision='0004' (chain integrity).
+    """Migration 0005 declares down_revision='0004' (Pitfall 2: chain integrity).
 
     Does NOT require live Postgres — reads the migration file directly so it
     always runs and guards against revision-chain breakage.
@@ -486,9 +486,7 @@ def test_migration_0005_chains_off_0004() -> None:
     assert down_revision_node is not None, "down_revision not found in 0005 migration"
 
     # ast.Constant for string literals
-    assert isinstance(revision_node, ast.Constant), (
-        "revision must be a string literal"
-    )
+    assert isinstance(revision_node, ast.Constant), "revision must be a string literal"
     assert isinstance(down_revision_node, ast.Constant), (
         "down_revision must be a string literal"
     )

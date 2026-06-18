@@ -108,9 +108,7 @@ def extract_palette(img: Image.Image) -> tuple[str | None, str | None]:
         return None, None
 
     # Sort by frequency descending; take top-2.
-    sorted_colors = sorted(
-        color_counts, key=lambda k: color_counts[k], reverse=True
-    )
+    sorted_colors = sorted(color_counts, key=lambda k: color_counts[k], reverse=True)
 
     def _to_hex(rgb: tuple[int, int, int]) -> str:
         r, g, b = rgb

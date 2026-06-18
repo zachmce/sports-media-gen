@@ -101,9 +101,7 @@ class TestSolidColor:
         """A solid navy image returns navy hex as primary."""
         img = _solid_rgba(_NAVY_OPAQUE)
         primary, secondary = extract_palette(img)
-        assert primary == _NAVY_HEX, (
-            f"Expected primary={_NAVY_HEX!r}, got {primary!r}"
-        )
+        assert primary == _NAVY_HEX, f"Expected primary={_NAVY_HEX!r}, got {primary!r}"
 
     def test_solid_color_secondary_equals_primary(self) -> None:
         """When only one distinct color is found, secondary == primary."""
@@ -130,9 +128,9 @@ class TestSolidColor:
         assert primary is not None
         assert len(primary) == 6, f"Expected 6-char hex, got {primary!r}"
         assert primary == primary.lower(), f"Expected lowercase hex, got {primary!r}"
-        assert all(
-            c in "0123456789abcdef" for c in primary
-        ), f"Expected valid hex chars, got {primary!r}"
+        assert all(c in "0123456789abcdef" for c in primary), (
+            f"Expected valid hex chars, got {primary!r}"
+        )
 
     def test_max_channel_clamps_to_ff_not_104(self) -> None:
         """A 255 channel must clamp to 'ff', not overflow to '104' (7-char hex bug).

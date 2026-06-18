@@ -251,12 +251,12 @@ class MLBStatsProvider:
                     short_display_name=entry.teamName,  # mascot (Pitfall 7)
                     location=entry.locationName,
                     name=entry.teamName,  # mascot (Pitfall 7)
-                    primary_color=primary_color,   # D-20: palette-extracted bare hex
+                    primary_color=primary_color,  # D-20: palette-extracted bare hex
                     secondary_color=secondary_color,
-                    logo_url=svg_url,              # D-19: SVG primary mark
+                    logo_url=svg_url,  # D-19: SVG primary mark
                     logo_variants={
-                        "spot": spot_url,          # D-21: spot PNG for provenance
-                        "svg": svg_url,            # D-21: SVG URL for provenance
+                        "spot": spot_url,  # D-21: spot PNG for provenance
+                        "svg": svg_url,  # D-21: SVG URL for provenance
                     },
                     is_active=entry.active,
                 )

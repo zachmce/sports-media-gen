@@ -1348,16 +1348,15 @@ async def test_milb_no_intra_level_alias_collisions() -> None:
     )
     import psycopg as _psycopg
 
-    with _psycopg.connect(raw_dsn) as conn:
-        with conn.cursor() as cur:
-            # First verify MiLB leagues are seeded (migration 0005 required)
-            cur.execute(
-                """
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        # First verify MiLB leagues are seeded (migration 0005 required)
+        cur.execute(
+            """
                 SELECT slug FROM leagues
                 WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
                 """
-            )
-            present_leagues = {row[0] for row in cur.fetchall()}
+        )
+        present_leagues = {row[0] for row in cur.fetchall()}
 
     expected_milb = {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a"}
     if present_leagues != expected_milb:
@@ -1366,18 +1365,17 @@ async def test_milb_no_intra_level_alias_collisions() -> None:
             f"got {present_leagues}). Run after migration 0005 + seed job."
         )
 
-    with _psycopg.connect(raw_dsn) as conn:
-        with conn.cursor() as cur:
-            # Check for any MiLB teams at all (seed may not have run yet)
-            cur.execute(
-                """
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        # Check for any MiLB teams at all (seed may not have run yet)
+        cur.execute(
+            """
                 SELECT COUNT(*) FROM teams t
                 JOIN leagues l ON l.id = t.league_id
                 WHERE l.slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
                 """
-            )
-            team_count_row = cur.fetchone()
-            team_count: int = team_count_row[0] if team_count_row else 0
+        )
+        team_count_row = cur.fetchone()
+        team_count: int = team_count_row[0] if team_count_row else 0
 
     if team_count == 0:
         pytest.skip(
@@ -1385,22 +1383,21 @@ async def test_milb_no_intra_level_alias_collisions() -> None:
         )
 
     # Actual collision check: any alias appearing > 1 time in the same league is a bug
-    with _psycopg.connect(raw_dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT alias, league_id, COUNT(*) AS cnt
-                FROM team_aliases
-                WHERE league_id IN (
-                    SELECT id FROM leagues
-                    WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
-                )
-                GROUP BY alias, league_id
-                HAVING COUNT(*) > 1
-                ORDER BY cnt DESC, alias
-                """
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT alias, league_id, COUNT(*) AS cnt
+            FROM team_aliases
+            WHERE league_id IN (
+                SELECT id FROM leagues
+                WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
             )
-            collision_rows = cur.fetchall()
+            GROUP BY alias, league_id
+            HAVING COUNT(*) > 1
+            ORDER BY cnt DESC, alias
+            """
+        )
+        collision_rows = cur.fetchall()
 
     assert not collision_rows, (
         f"Intra-level alias collisions found (D-10 violation): {collision_rows}. "

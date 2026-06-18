@@ -401,11 +401,11 @@ def test_svg_variant_not_selected_by_loader() -> None:
         "abbreviation": "TOL",
         "primary_color": None,
         "secondary_color": None,
-        "logo_url": svg_url,               # D-19: SVG URL is now the terminal fallback
+        "logo_url": svg_url,  # D-19: SVG URL is now the terminal fallback
         "provider_id": "512",
         "logo_variants": {
-            "spot": spot_png_url,          # D-21: spot PNG for provenance
-            "svg": svg_url,               # D-21: SVG URL for provenance
+            "spot": spot_png_url,  # D-21: spot PNG for provenance
+            "svg": svg_url,  # D-21: SVG URL for provenance
         },
     }
 
@@ -508,6 +508,5 @@ def test_svg_variant_not_selected_by_loader() -> None:
     assert redis_mock.set.called, "Expected redis.set to be called (cache update)"
     cached_bytes: bytes = redis_mock.set.call_args[0][1]
     assert cached_bytes.startswith(b"\x89PNG"), (
-        f"Expected PNG magic header in cached bytes (D-19). "
-        f"Got {cached_bytes[:4]!r}"
+        f"Expected PNG magic header in cached bytes (D-19). Got {cached_bytes[:4]!r}"
     )

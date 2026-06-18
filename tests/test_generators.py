@@ -773,11 +773,11 @@ def test_milb_colorless_team_renders() -> None:
         "slug": "toledo-mud-hens",
         "display_name": "Toledo Mud Hens",
         "abbreviation": "TOL",
-        "primary_color": None,       # null-color path — MILB-05 safety net
+        "primary_color": None,  # null-color path — MILB-05 safety net
         "secondary_color": None,
         "logo_url": "https://www.mlbstatic.com/team-logos/512.svg",  # D-19
         "provider_id": "512",
-        "logo_variants": {           # D-21: both spot + svg provenance keys
+        "logo_variants": {  # D-21: both spot + svg provenance keys
             "spot": "https://midfield.mlbstatic.com/v1/team/512/spots/500",
             "svg": "https://www.mlbstatic.com/team-logos/512.svg",
         },
@@ -843,11 +843,11 @@ def test_milb_colored_team_renders() -> None:
         "slug": "toledo-mud-hens",
         "display_name": "Toledo Mud Hens",
         "abbreviation": "TOL",
-        "primary_color": "#002b5c",   # D-20: navy blue (Toledo palette)
+        "primary_color": "#002b5c",  # D-20: navy blue (Toledo palette)
         "secondary_color": "#fdb913",  # D-20: gold
         "logo_url": "https://www.mlbstatic.com/team-logos/512.svg",  # D-19
         "provider_id": "512",
-        "logo_variants": {            # D-21: both spot + svg provenance keys
+        "logo_variants": {  # D-21: both spot + svg provenance keys
             "spot": "https://midfield.mlbstatic.com/v1/team/512/spots/500",
             "svg": "https://www.mlbstatic.com/team-logos/512.svg",
         },
@@ -858,7 +858,7 @@ def test_milb_colored_team_renders() -> None:
         "slug": "durham-bulls",
         "display_name": "Durham Bulls",
         "abbreviation": "DUR",
-        "primary_color": "#1b3a6b",   # D-20: Durham navy (representative)
+        "primary_color": "#1b3a6b",  # D-20: Durham navy (representative)
         "secondary_color": "#c8102e",  # D-20: Durham red
         "logo_url": "https://www.mlbstatic.com/team-logos/234.svg",  # D-19
         "provider_id": "234",

@@ -35,16 +35,16 @@ _mlb: MLBStatsProvider = MLBStatsProvider()
 # All 6 ESPN slugs map to the ESPN singleton; the 4 MiLB slugs map to the
 # shared MLBStatsProvider singleton.  KNOWN_LEAGUES auto-derives to 10 (D-16).
 LEAGUE_REGISTRY: dict[str, DataProvider] = {
-    "nba":           _espn,
-    "nfl":           _espn,
-    "mlb":           _espn,
-    "nhl":           _espn,
-    "ncaaf":         _espn,
-    "ncaab":         _espn,
-    "milb-aaa":      _mlb,    # Phase 15 — Triple-A
-    "milb-aa":       _mlb,    # Phase 15 — Double-A
-    "milb-high-a":   _mlb,    # Phase 15 — High-A
-    "milb-single-a": _mlb,    # Phase 15 — Single-A
+    "nba": _espn,
+    "nfl": _espn,
+    "mlb": _espn,
+    "nhl": _espn,
+    "ncaaf": _espn,
+    "ncaab": _espn,
+    "milb-aaa": _mlb,  # Phase 15 — Triple-A
+    "milb-aa": _mlb,  # Phase 15 — Double-A
+    "milb-high-a": _mlb,  # Phase 15 — High-A
+    "milb-single-a": _mlb,  # Phase 15 — Single-A
 }
 
 # ---------------------------------------------------------------------------

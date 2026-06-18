@@ -358,12 +358,11 @@ async def test_milb_resolver_cross_level_isolation(
     raw_dsn = _POSTGRES_DSN.replace("postgresql+psycopg://", "postgresql://")
 
     # Check milb-aaa and milb-aa league rows exist (only after migration 0005)
-    with psycopg.connect(raw_dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT slug, id FROM leagues WHERE slug IN ('milb-aaa', 'milb-aa')"
-            )
-            league_rows = {row[0]: row[1] for row in cur.fetchall()}
+    with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT slug, id FROM leagues WHERE slug IN ('milb-aaa', 'milb-aa')"
+        )
+        league_rows = {row[0]: row[1] for row in cur.fetchall()}
 
     if "milb-aaa" not in league_rows or "milb-aa" not in league_rows:
         pytest.skip(
@@ -372,7 +371,6 @@ async def test_milb_resolver_cross_level_isolation(
         )
 
     aaa_id = league_rows["milb-aaa"]
-    aa_id = league_rows["milb-aa"]
 
     with psycopg.connect(raw_dsn) as conn:
         with conn.cursor() as cur:
@@ -391,7 +389,8 @@ async def test_milb_resolver_cross_level_isolation(
             if row is None:
                 # Already exists — fetch the id
                 cur.execute(
-                    "SELECT id FROM teams WHERE league_id = %s AND slug = 'columbus-clippers'",
+                    "SELECT id FROM teams WHERE league_id = %s "
+                    "AND slug = 'columbus-clippers'",
                     (aaa_id,),
                 )
                 fetched = cur.fetchone()

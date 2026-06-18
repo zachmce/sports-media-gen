@@ -404,13 +404,17 @@ def test_contrast_both_colors_none_milb() -> None:
     # Simulate that: both primary_rgb = secondary_rgb = NULL_PRIMARY.
     # repr_rgb: the dominant logo color (for a placeholder logo this is also grey-ish).
     grey: tuple[int, int, int] = _NULL_PRIMARY
-    repr_rgb: tuple[int, int, int] = (200, 200, 200)  # near-white repr (placeholder logo)
+    repr_rgb: tuple[int, int, int] = (
+        200,
+        200,
+        200,
+    )  # near-white repr (placeholder logo)
 
     result = decide_contrast(
         primary_rgb=grey,
         secondary_rgb=grey,
         repr_rgb=repr_rgb,
-        logo_variants=None,   # MiLB teams have no 'default'/'dark' logo variants
+        logo_variants=None,  # MiLB teams have no 'default'/'dark' logo variants
     )
 
     # No 'primary_logo_on_primary_color' or 'dark' variants → recommended_variant=None
