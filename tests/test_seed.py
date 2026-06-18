@@ -1403,3 +1403,92 @@ async def test_milb_no_intra_level_alias_collisions() -> None:
         f"Intra-level alias collisions found (D-10 violation): {collision_rows}. "
         "Each (alias, league_id) pair must be unique per the DB constraint."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 16 Wave 0: milb-rookie alias-collision scaffold (pg_required)
+# ---------------------------------------------------------------------------
+
+
+@pg_required
+async def test_milb_rookie_no_alias_collisions() -> None:
+    """MILB-07 / criterion #2: zero intra-league alias collisions for milb-rookie.
+
+    Post-seed verification query (RESEARCH.md §Post-Seed Collision Verification):
+        SELECT alias, league_id, COUNT(*)
+        FROM team_aliases
+        WHERE league_id = (SELECT id FROM leagues WHERE slug = 'milb-rookie')
+        GROUP BY alias, league_id
+        HAVING COUNT(*) > 1;
+    Expected: 0 rows.
+
+    The 28 DSL city-sharing locationName aliases (e.g. "bocachica" for 5 teams)
+    are handled by ON CONFLICT DO NOTHING in the seed upsert loop — each team
+    retains at least one unique alias (its prefixed slug/teamName).  This test
+    verifies that no alias is duplicated within milb-rookie after seeding.
+
+    Skips when Postgres is absent (pg_required) or milb-rookie is not yet seeded
+    (migration 0006 not applied + seed job not yet run).  Turns GREEN once Phase
+    16 Plan 03 seed job has run against a live database.
+    """
+    import os
+
+    raw_dsn = os.environ.get("POSTGRES_DSN", "").replace(
+        "postgresql+psycopg://", "postgresql://"
+    )
+    import psycopg as _psycopg
+
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        # Verify milb-rookie league row is present (migration 0006 required)
+        cur.execute(
+            "SELECT id FROM leagues WHERE slug = %s",
+            ("milb-rookie",),
+        )
+        league_row = cur.fetchone()
+
+    if league_row is None:
+        pytest.skip(
+            "milb-rookie league row not present yet. "
+            "Run after migration 0006 + seed job (Phase 16 Plan 03)."
+        )
+
+    league_id: int = league_row[0]
+
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        # Check that teams have actually been seeded (seed job may not have run)
+        cur.execute(
+            "SELECT COUNT(*) FROM teams WHERE league_id = %s",
+            (league_id,),
+        )
+        team_count_row = cur.fetchone()
+        team_count: int = team_count_row[0] if team_count_row else 0
+
+    if team_count == 0:
+        pytest.skip(
+            "No milb-rookie teams seeded yet. "
+            "Run seed job after migration 0006 lands (Phase 16 Plan 03)."
+        )
+
+    # Actual collision check: any alias appearing > 1 time within milb-rookie is a bug.
+    # Parameterized query — no f-string SQL (T-16-SQLI mitigation).
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT alias, league_id, COUNT(*) AS cnt
+            FROM team_aliases
+            WHERE league_id = (SELECT id FROM leagues WHERE slug = %s)
+            GROUP BY alias, league_id
+            HAVING COUNT(*) > 1
+            ORDER BY cnt DESC, alias
+            """,
+            ("milb-rookie",),
+        )
+        collision_rows = cur.fetchall()
+
+    assert not collision_rows, (
+        f"Alias collisions found in milb-rookie (criterion #2 violation): "
+        f"{collision_rows}. "
+        "Each (alias, league_id) pair must be unique. "
+        "ON CONFLICT DO NOTHING should handle locationName city-sharing collisions — "
+        "check that the provider emits prefixed extra_aliases for uniqueness (D-06)."
+    )
