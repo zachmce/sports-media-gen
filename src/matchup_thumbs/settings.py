@@ -50,8 +50,20 @@ class Settings(BaseSettings):
         "https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners"
     )
 
+    # MLB Stats API integration (MILB-01 / D-02, D-11)
+    # Key-free; no auth header required.  Three distinct base URLs:
+    #   statsapi — team registry endpoint (statsapi.mlb.com)
+    #   spots    — spot PNG raster logos (midfield.mlbstatic.com)
+    #   logos    — SVG mark URLs stored in logo_variants, never fetched at render time
+    mlb_statsapi_base_url: str = "https://statsapi.mlb.com"
+    mlb_spots_base_url: str = "https://midfield.mlbstatic.com"
+    mlb_logos_base_url: str = "https://www.mlbstatic.com/team-logos"
+
     # Seed behaviour
-    seed_leagues: str = "nba,nfl,mlb,nhl,ncaaf,ncaab"  # comma-separated; all by default
+    seed_leagues: str = (
+        "nba,nfl,mlb,nhl,ncaaf,ncaab,"
+        "milb-aaa,milb-aa,milb-high-a,milb-single-a"
+    )  # comma-separated; all 10 slugs (ESPN 6 + MiLB 4, Pitfall 4 — never drop ESPN)
     logo_cache_ttl: int = 30 * 24 * 3600  # 30 days in seconds
 
     # Resolver
