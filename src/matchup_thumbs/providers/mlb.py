@@ -222,6 +222,13 @@ class MLBStatsProvider:
         # KeyError on unknown slug (SSRF gate — never build URL before this lookup)
         sport_id = _MILB_SPORT_IDS[league_slug]
 
+        # Gate the Rookie complex-tag branch on slug identity (D-13 / Pitfall 6).
+        # All non-Rookie slug paths are byte-identical to before — _MILB_COMPLEX_TAG_IDS
+        # is NEVER called for non-Rookie entries (those leagues also have league.id
+        # fields but their IDs are outside the dict; calling .get() on them would
+        # return None and silently skip every AAA team).
+        is_rookie = league_slug == "milb-rookie"
+
         response = await fetch_mlb_teams(
             client, settings.mlb_statsapi_base_url, sport_id
         )
@@ -233,18 +240,44 @@ class MLBStatsProvider:
         # genuinely bounds in-flight SVG fetches.
         semaphore = asyncio.Semaphore(settings.espn_semaphore_size)
 
-        active_entries = [e for e in response.teams if e.active]
+        all_entries = [e for e in response.teams if e.active]
 
-        # Derive slugs in order FIRST (WR-02 intra-batch collision guard).
-        # The team upsert is ON CONFLICT (league_id, slug) DO UPDATE, so two
-        # teams deriving the same slug would silently overwrite each other in
-        # `teams`.  We do not disambiguate here (no slug-derivation change —
-        # that is Phase 16); logging is the runtime guard so the otherwise
-        # invisible collision is at least visible in the seed logs.
+        # Derive slugs + tags in order FIRST (WR-02 intra-batch collision guard).
+        # The team upsert is ON CONFLICT (league_id, slug) DO UPDATE, so two teams
+        # deriving the same slug would silently overwrite each other in `teams`.
+        # For Rookie: derive the complex tag via _MILB_COMPLEX_TAG_IDS[league.id]
+        # (T-i3r-01 gate), then build the slug with _derive_rookie_slug.
+        # Skipped Rookie entries (unknown complex) are excluded from kept_entries,
+        # slugs, and tags so asyncio.gather and the final zip stay index-aligned.
+        kept_entries = []
         slugs: list[str] = []
+        tags: list[str | None] = []
         seen_slugs: dict[str, str] = {}
-        for entry in active_entries:
-            slug = _derive_mlb_slug(entry.locationName, entry.teamName)
+        for entry in all_entries:
+            if is_rookie:
+                # Primary: derive tag from the fixed league.id dict (T-i3r-01)
+                tag: str | None = _MILB_COMPLEX_TAG_IDS.get(
+                    entry.league.id if entry.league is not None else -1
+                )
+                if tag is None:
+                    # D-04 fallback: detect leading DSL/ACL/FCL token in teamName
+                    for pfx in _COMPLEX_PREFIXES:
+                        if entry.teamName.startswith(pfx):
+                            tag = pfx.strip().lower()
+                            break
+                if tag is None:
+                    # Unknown complex — skip this entry; never guess, never crash (D-04)
+                    await logger.awarning(
+                        "milb_rookie_unknown_complex",
+                        team_id=entry.id,
+                        team_name=entry.teamName,
+                    )
+                    continue
+                slug = _derive_rookie_slug(tag, entry.teamName)
+            else:
+                tag = None
+                slug = _derive_mlb_slug(entry.locationName, entry.teamName)
+
             if slug in seen_slugs:
                 await logger.awarning(
                     "milb_slug_collision",
@@ -254,12 +287,14 @@ class MLBStatsProvider:
                     colliding=str(entry.id),
                 )
             seen_slugs[slug] = str(entry.id)
+            kept_entries.append(entry)
             slugs.append(slug)
+            tags.append(tag)
 
         # Rasterize-once, CONCURRENTLY (WR-06): dispatch every team's palette
         # extraction at once and let the shared semaphore (above) bound how many
         # SVG fetches are in flight.  asyncio.gather preserves input order, so
-        # `colors[i]` lines up with `active_entries[i]`.  Each task degrades to
+        # `colors[i]` lines up with `kept_entries[i]`.  Each task degrades to
         # (None, None) internally on any error (MILB-05) — never aborts the
         # league — so gather never raises here.
         colors = await asyncio.gather(
@@ -270,16 +305,33 @@ class MLBStatsProvider:
                     semaphore,
                     slug,
                 )
-                for entry, slug in zip(active_entries, slugs, strict=True)
+                for entry, slug in zip(kept_entries, slugs, strict=True)
             )
         )
 
         teams: list[ProviderTeam] = []
-        for entry, slug, (primary_color, secondary_color) in zip(
-            active_entries, slugs, colors, strict=True
+        for entry, slug, tag, (primary_color, secondary_color) in zip(
+            kept_entries, slugs, tags, colors, strict=True
         ):
             svg_url = f"{settings.mlb_logos_base_url}/{entry.id}.svg"
             spot_url = f"{settings.mlb_spots_base_url}/v1/team/{entry.id}/spots/500"
+
+            # Build prefixed alias variants for Rookie teams (D-06 / D-07).
+            # seed.py loops generate_aliases(team) + team.extra_aliases, so these
+            # arrive in addition to the standard alias set.  Bare locationName
+            # aliases (e.g. "Boca Chica") will still be generated and may CONFLICT
+            # on the 28 city-sharing cases — handled by ON CONFLICT DO NOTHING.
+            extra_aliases: list[str] = []
+            if is_rookie and tag is not None:
+                stripped = entry.teamName
+                for pfx in _COMPLEX_PREFIXES:
+                    if stripped.startswith(pfx):
+                        stripped = stripped[len(pfx) :]
+                        break
+                extra_aliases = [
+                    f"{tag} {stripped}".lower(),  # e.g. "dsl cle goryl"
+                    f"{tag}-{stripped}".lower(),  # e.g. "dsl-cle-goryl" (same as slug)
+                ]
 
             teams.append(
                 ProviderTeam(
@@ -298,6 +350,7 @@ class MLBStatsProvider:
                         "svg": svg_url,  # D-21: SVG URL for provenance
                     },
                     is_active=entry.active,
+                    extra_aliases=extra_aliases,  # D-06/D-07: Rookie prefixed variants
                 )
             )
 
