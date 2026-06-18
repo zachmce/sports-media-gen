@@ -10,7 +10,7 @@ silently.  Fail-loudly validation (``Field(min_length=...)``) belongs in
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProviderTeam(BaseModel):
@@ -42,6 +42,11 @@ class ProviderTeam(BaseModel):
     logo_url: str | None = None  # canonical logo CDN URL
     logo_variants: dict[str, str] = {}  # variant key → href
     is_active: bool = True
+    # Provider-supplied alias variants beyond what generate_aliases() derives.
+    # Used by milb-rookie to emit prefixed complex variants (e.g. "dsl yankees").
+    # seed.py loops: generate_aliases(team) + team.extra_aliases (D-07).
+    # All other leagues leave this empty — zero behavioral change for them.
+    extra_aliases: list[str] = Field(default_factory=list)
 
 
 class ProviderLogoShield(BaseModel):

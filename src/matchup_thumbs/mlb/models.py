@@ -12,6 +12,23 @@ we do not.  Full Python 3.14 ``X | None`` union syntax throughout.
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class MLBLeagueRef(BaseModel):
+    """Nested league reference on a team object — used to derive complex tag.
+
+    Present on all team objects (AAA through Rookie).  For Rookie teams
+    ``league.id`` identifies the complex (130=DSL, 121=ACL, 124=FCL).
+    For non-Rookie teams this field is parsed but never used.
+
+    ``extra="ignore"`` keeps forward-compat: the API also returns ``link``
+    and any other undocumented fields, all silently dropped.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int  # stable MLB Stats API league ID — 130=DSL, 121=ACL, 124=FCL
+    name: str  # e.g. "Dominican Summer League" — for log context only
+
+
 class MLBTeamEntry(BaseModel):
     """A single team object from the MLB Stats API ``teams`` array.
 
@@ -36,6 +53,13 @@ class MLBTeamEntry(BaseModel):
     # unreliable across all teams (Assumption A1).
     clubName: str | None = None
     shortName: str | None = None
+
+    # The ``league`` object is present on all team responses but was previously
+    # silently dropped by extra="ignore".  Making it explicit with a None default
+    # means existing AAA–Single-A code paths are unchanged (they never read it).
+    # Rookie path: entry.league.id is mapped through _MILB_COMPLEX_TAG_IDS to
+    # derive the complex tag (D-03).
+    league: MLBLeagueRef | None = None
 
 
 class MLBTeamsResponse(BaseModel):
