@@ -314,7 +314,7 @@ async def run(
 
                 # --- Alias upsert (D-11 / D-12) ---
                 async with conn.cursor() as cur:
-                    for alias in generate_aliases(team):
+                    for alias in generate_aliases(team) + team.extra_aliases:
                         await cur.execute(
                             """
                             INSERT INTO team_aliases (team_id, league_id, alias)
