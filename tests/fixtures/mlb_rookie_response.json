@@ -1,0 +1,145 @@
+{
+  "copyright": "Copyright 2026 MLB Advanced Media, L.P.",
+  "teams": [
+    {
+      "id": 5506,
+      "name": "DSL CLE Goryl",
+      "link": "/api/v1/teams/5506",
+      "season": 2026,
+      "abbreviation": "DGOR",
+      "teamName": "DSL CLE Goryl",
+      "locationName": "Boca Chica",
+      "active": true,
+      "league": {
+        "id": 130,
+        "name": "Dominican Summer League",
+        "link": "/api/v1/league/130"
+      },
+      "sport": {
+        "id": 16,
+        "name": "Rookie",
+        "link": "/api/v1/sport/16"
+      }
+    },
+    {
+      "id": 5005,
+      "name": "DSL Astros Orange",
+      "link": "/api/v1/teams/5005",
+      "season": 2026,
+      "abbreviation": "DAST",
+      "teamName": "DSL Astros Orange",
+      "locationName": "Boca Chica",
+      "active": true,
+      "league": {
+        "id": 130,
+        "name": "Dominican Summer League",
+        "link": "/api/v1/league/130"
+      },
+      "sport": {
+        "id": 16,
+        "name": "Rookie",
+        "link": "/api/v1/sport/16"
+      }
+    },
+    {
+      "id": 4404,
+      "name": "DSL Pirates Gold",
+      "link": "/api/v1/teams/4404",
+      "season": 2026,
+      "abbreviation": "DPIG",
+      "teamName": "DSL Pirates Gold",
+      "locationName": "Santo Domingo",
+      "active": true,
+      "league": {
+        "id": 130,
+        "name": "Dominican Summer League",
+        "link": "/api/v1/league/130"
+      },
+      "sport": {
+        "id": 16,
+        "name": "Rookie",
+        "link": "/api/v1/sport/16"
+      }
+    },
+    {
+      "id": 404,
+      "name": "ACL Angels",
+      "link": "/api/v1/teams/404",
+      "season": 2026,
+      "abbreviation": "ANG",
+      "teamName": "ACL Angels",
+      "locationName": "Tempe",
+      "active": true,
+      "league": {
+        "id": 121,
+        "name": "Arizona Complex League",
+        "link": "/api/v1/league/121"
+      },
+      "sport": {
+        "id": 16,
+        "name": "Rookie",
+        "link": "/api/v1/sport/16"
+      }
+    },
+    {
+      "id": 406,
+      "name": "ACL Brewers",
+      "link": "/api/v1/teams/406",
+      "season": 2026,
+      "abbreviation": "MIL",
+      "teamName": "ACL Brewers",
+      "locationName": "Phoenix",
+      "active": true,
+      "league": {
+        "id": 121,
+        "name": "Arizona Complex League",
+        "link": "/api/v1/league/121"
+      },
+      "sport": {
+        "id": 16,
+        "name": "Rookie",
+        "link": "/api/v1/sport/16"
+      }
+    },
+    {
+      "id": 1998,
+      "name": "FCL Astros",
+      "link": "/api/v1/teams/1998",
+      "season": 2026,
+      "abbreviation": "HOU",
+      "teamName": "FCL Astros",
+      "locationName": "West Palm Beach",
+      "active": true,
+      "league": {
+        "id": 124,
+        "name": "Florida Complex League",
+        "link": "/api/v1/league/124"
+      },
+      "sport": {
+        "id": 16,
+        "name": "Rookie",
+        "link": "/api/v1/sport/16"
+      }
+    },
+    {
+      "id": 464,
+      "name": "FCL Braves",
+      "link": "/api/v1/teams/464",
+      "season": 2026,
+      "abbreviation": "ATL",
+      "teamName": "FCL Braves",
+      "locationName": "North Port",
+      "active": true,
+      "league": {
+        "id": 124,
+        "name": "Florida Complex League",
+        "link": "/api/v1/league/124"
+      },
+      "sport": {
+        "id": 16,
+        "name": "Rookie",
+        "link": "/api/v1/sport/16"
+      }
+    }
+  ]
+}
