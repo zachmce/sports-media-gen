@@ -20,9 +20,10 @@ RUN uv sync --frozen --no-dev
 # Stage 2: final runtime image — slim, non-root, WebP-capable
 FROM python:3.14-slim-bookworm
 
-# Install runtime shared library for Pillow WebP support
+# Install runtime shared libraries: Pillow WebP support + Cairo for SVG rasterization (D-19)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libwebp7 \
+    libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -36,6 +37,9 @@ COPY --from=builder /app/src /app/src
 # WebP is a PIL image plugin module (not a codec), so check_module is correct.
 # See: https://pillow.readthedocs.io/en/stable/reference/features.html
 RUN /app/.venv/bin/python3 -c "from PIL import Image, features; assert features.check_module('webp'), 'WebP not available'"
+# Build-time smoke test: confirm cairosvg can import (requires libcairo2 .so at runtime).
+# Catches a missing libcairo2 at build time rather than silently crashing at app startup (Pitfall 5).
+RUN /app/.venv/bin/python3 -c "import cairosvg; print('cairosvg OK')"
 
 # Copy Alembic migration artifacts (the migrate service runs alembic from this image)
 COPY alembic.ini ./
