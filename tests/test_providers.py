@@ -1,4 +1,4 @@
-"""Wave 0 scaffold for Phase 14 + Phase 15 provider seam tests.
+"""Wave 0 scaffold for Phase 14 + Phase 15 + Phase 16 provider seam tests.
 
 Tests for the DataProvider Protocol, LEAGUE_REGISTRY, KNOWN_LEAGUES, and the
 SSRF gate documented in T-i3r-01 (NCAA sportbanner dict-lookup-as-gate) and
@@ -7,6 +7,7 @@ T-15-XSS (MiLB SVG variant never-rasterized invariant).
 Phase 14: ESPN provider seam, KNOWN_LEAGUES, SSRF gate.
 Phase 15: MLBStatsProvider scaffold tests (guarded by importorskip so they skip
 until providers/mlb.py lands in Wave 1).
+Phase 16: Rookie complex-tag gate + fetch_teams("milb-rookie") tests.
 
 The module is guarded with ``pytest.importorskip`` so it collects and skips
 cleanly when the providers package is absent, then becomes real assertions once
@@ -45,7 +46,7 @@ _EXPECTED_ESPN_SLUGS: frozenset[str] = frozenset(
     {"nba", "nfl", "mlb", "nhl", "ncaaf", "ncaab"}
 )
 
-# All 10 slugs post-Phase-15: 6 ESPN + 4 MiLB
+# All 11 slugs post-Phase-16: 6 ESPN + 5 MiLB
 _EXPECTED_ALL_SLUGS: frozenset[str] = frozenset(
     {
         "nba",
@@ -58,6 +59,7 @@ _EXPECTED_ALL_SLUGS: frozenset[str] = frozenset(
         "milb-aa",
         "milb-high-a",
         "milb-single-a",
+        "milb-rookie",  # Phase 16
     }
 )
 
@@ -71,13 +73,12 @@ def test_known_leagues_derives_from_registry() -> None:
     assert frozenset(LEAGUE_REGISTRY.keys()) == KNOWN_LEAGUES
 
 
-def test_known_leagues_has_ten_slugs() -> None:
-    """LEAGUE_REGISTRY covers all 10 slugs (6 ESPN + 4 MiLB) post-Phase-15.
+def test_known_leagues_has_eleven_slugs() -> None:
+    """LEAGUE_REGISTRY covers all 11 slugs (6 ESPN + 5 MiLB) post-Phase-16.
 
-    Updated from test_known_leagues_has_six_slugs (D-18 Pitfall 5): adding 4
-    MiLB slugs via LEAGUE_REGISTRY makes KNOWN_LEAGUES auto-grow to 10.  This
-    test will be RED (KNOWN_LEAGUES still == 6 ESPN slugs) until Wave 1 lands
-    MLBStatsProvider in registry.py.  At that point it turns GREEN.
+    Updated from test_known_leagues_has_ten_slugs (Phase 15): adding milb-rookie
+    via LEAGUE_REGISTRY makes KNOWN_LEAGUES auto-grow to 11 (D-09).  This test
+    is RED until Plan 02 registers milb-rookie in registry.py (Phase 16 Wave 1).
     """
     assert KNOWN_LEAGUES == _EXPECTED_ALL_SLUGS
 
@@ -148,7 +149,7 @@ def test_mlb_provider_satisfies_protocol() -> None:
     """MILB-01: MLBStatsProvider is structurally compatible with DataProvider.
 
     Mirrors test_espn_provider_satisfies_protocol.
-    list_leagues() returns the 4 MiLB slugs.
+    list_leagues() returns the 5 MiLB slugs (updated for Phase 16: milb-rookie).
     """
     _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
     _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
@@ -156,16 +157,17 @@ def test_mlb_provider_satisfies_protocol() -> None:
     provider: DataProvider = _MLBStatsProvider()  # type: ignore[assignment]
     result = provider.list_leagues()
     assert frozenset(result) == frozenset(
-        {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a"}
+        {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a", "milb-rookie"}
     )
 
 
 def test_milb_sport_ids_is_gate() -> None:
     """D-03 / T-i3r-01: _MILB_SPORT_IDS is the SSRF gate for MiLB sport IDs.
 
-    Only the 4 MiLB slugs are keys with exact integer sportId values.
-    An unknown slug is NOT present — a dict-lookup KeyError is the gate that
-    prevents any user/API-supplied string from reaching the MLB Stats API URL.
+    Only the 5 MiLB slugs are keys with exact integer sportId values (updated
+    for Phase 16: milb-rookie added with sportId=16).  An unknown slug is NOT
+    present — a dict-lookup KeyError is the gate that prevents any
+    user/API-supplied string from reaching the MLB Stats API URL.
     Mirrors test_ncaa_sportbanner_sports_is_gate (T-i3r-01 pattern).
     """
     _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
@@ -176,13 +178,14 @@ def test_milb_sport_ids_is_gate() -> None:
         "milb-aa",
         "milb-high-a",
         "milb-single-a",
+        "milb-rookie",
     }
     assert _MILB_SPORT_IDS["milb-aaa"] == 11
     assert _MILB_SPORT_IDS["milb-aa"] == 12
     assert _MILB_SPORT_IDS["milb-high-a"] == 13
     assert _MILB_SPORT_IDS["milb-single-a"] == 14
+    assert _MILB_SPORT_IDS["milb-rookie"] == 16  # Phase 16 — Rookie: DSL+ACL+FCL
     # Out-of-scope slugs must NOT be in the gate dict
-    assert "milb-rookie" not in _MILB_SPORT_IDS
     assert "xyz" not in _MILB_SPORT_IDS
 
 
