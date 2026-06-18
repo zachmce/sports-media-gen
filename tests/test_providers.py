@@ -357,25 +357,30 @@ def test_mlb_logo_url_and_variants_mapping(httpx_mock: Any) -> None:
 
 
 def test_svg_variant_not_selected_by_loader() -> None:
-    """MILB-04 / T-15-XSS: 'svg' in logo_variants is NEVER fetched at render time.
+    """MILB-04 / T-15-XSS: loader chain never selects 'svg' or 'spot' variant keys.
+
+    Updated for D-19/D-21 (15-06): logo_url is now the SVG primary mark URL
+    (terminal fallback — D-19).  logo_variants carries both 'spot' and 'svg' keys
+    for provenance (D-21).
 
     The loader's fallback chain is: variant → 'dark' → 'default' → logo_url.
-    When logo_variants = {'svg': svg_url} and variant='default' is requested,
-    the chain misses 'default', then 'dark', then falls through to team['logo_url']
-    (the spot PNG).  The SVG URL is never fetched.
+    With logo_variants = {'spot': ..., 'svg': ...} and variant='default' requested:
+    - variants.get('default') → None (miss)
+    - variants.get('dark')    → None (miss)
+    - variants.get('default') → None (already tried)
+    - falls through to team['logo_url'] (the SVG URL)
+    The 'svg' and 'spot' keys are NEVER iterated (T-15-XSS preserved).
 
-    This test exercises the loader's _load_one_logo fallback logic directly
-    by mocking Redis (miss) and the HTTP client.  It verifies the fetch URL
-    is the spot PNG (logo_url), NOT the SVG URL from logo_variants['svg'].
-    (T-15-XSS mitigated: SVG never rasterized.)
+    The loader calls rasterize_svg_if_needed on the fetched bytes so the cached /
+    decoded value is always PNG (D-19 seam B — lazy-fetch path).  rasterize is
+    mocked to return fake PNG bytes so this test runs without libcairo2 locally.
 
     NOTE: This test does NOT require matchup_thumbs.providers.mlb — it drives
-    the existing assets.loader directly with a synthetic MiLB-style team dict.
-    It is NOT guarded by importorskip because loader.py already exists.
+    assets.loader directly with a synthetic MiLB-style team dict.
     """
     import asyncio
     import io as _io
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from PIL import Image as _Image
 
@@ -385,6 +390,9 @@ def test_svg_variant_not_selected_by_loader() -> None:
     spot_png_url = "https://midfield.mlbstatic.com/v1/team/512/spots/500"
     svg_url = "https://www.mlbstatic.com/team-logos/512.svg"
 
+    # D-19: logo_url is now the SVG URL (terminal fallback after chain misses).
+    # D-21: logo_variants carries both 'spot' and 'svg' provenance keys —
+    # neither 'spot' nor 'svg' is in the (variant, 'dark', 'default') chain.
     team: dict[str, Any] = {
         "id": 1,
         "league_id": 99,
@@ -393,23 +401,29 @@ def test_svg_variant_not_selected_by_loader() -> None:
         "abbreviation": "TOL",
         "primary_color": None,
         "secondary_color": None,
-        "logo_url": spot_png_url,           # spot PNG is the terminal fallback
+        "logo_url": svg_url,               # D-19: SVG URL is now the terminal fallback
         "provider_id": "512",
-        "logo_variants": {"svg": svg_url},  # only 'svg' key — never a valid chain hit
+        "logo_variants": {
+            "spot": spot_png_url,          # D-21: spot PNG for provenance
+            "svg": svg_url,               # D-21: SVG URL for provenance
+        },
     }
 
     fetched_urls: list[str] = []
 
-    # Build a 1×1 white PNG in memory for the mock response
+    # Build fake SVG bytes (minimal valid — just needs to look like SVG to the mock).
+    fake_svg = b"<svg><rect/></svg>"
+
+    # Build fake PNG bytes (PNG magic header) for the mock rasterize return value.
     buf = _io.BytesIO()
-    _Image.new("RGBA", (1, 1), (255, 255, 255, 255)).save(buf, format="PNG")
+    _Image.new("RGBA", (1, 1), (0, 43, 92, 255)).save(buf, format="PNG")
     fake_png = buf.getvalue()
 
     async def _fake_get(url: str, **kwargs: Any) -> Any:
         fetched_urls.append(url)
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.content = fake_png
+        mock_resp.content = fake_svg  # loader receives SVG bytes from the terminal URL
         return mock_resp
 
     redis_mock = MagicMock()
@@ -419,26 +433,81 @@ def test_svg_variant_not_selected_by_loader() -> None:
     http_client = MagicMock()
     http_client.get = _fake_get
 
+    rasterize_called_with: list[bytes] = []
+
+    def _mock_rasterize(raw: bytes) -> bytes:
+        """Capture calls to rasterize_svg_if_needed; return fake PNG bytes."""
+        rasterize_called_with.append(raw)
+        return fake_png
+
     async def _run() -> None:
-        await _load_one_logo(
-            team=team,
-            redis=redis_mock,
-            http_client=http_client,
-            league="milb-aaa",
-            settings=_settings,
-            variant="default",
-        )
+        # The loader's lazy `from ..svg import rasterize_svg_if_needed` normally
+        # fails when libcairo2 is absent (svg.py imports cairosvg at module level
+        # which raises OSError).  We pre-inject a stub cairosvg module so svg.py
+        # can be imported; then patch rasterize_svg_if_needed with our mock.
+        import sys
+        import types
+
+        _cairosvg_available = True
+        try:
+            import cairosvg as _cs  # type: ignore[import-untyped]  # noqa: F401
+        except OSError:
+            _cairosvg_available = False
+
+        if not _cairosvg_available:
+            # Inject a minimal cairosvg stub so svg.py can be imported.
+            stub = types.ModuleType("cairosvg")
+            stub.svg2png = lambda **_kw: b""  # type: ignore[attr-defined]
+            sys.modules.setdefault("cairosvg", stub)
+
+        # Remove any cached svg module so the lazy import picks up freshly.
+        sys.modules.pop("matchup_thumbs.svg", None)
+
+        with patch(
+            "matchup_thumbs.svg.rasterize_svg_if_needed", side_effect=_mock_rasterize
+        ):
+            await _load_one_logo(
+                team=team,
+                redis=redis_mock,
+                http_client=http_client,
+                league="milb-aaa",
+                settings=_settings,
+                variant="default",
+            )
+
+        # Clean up injected stub so other tests are not affected.
+        if not _cairosvg_available:
+            sys.modules.pop("cairosvg", None)
+        sys.modules.pop("matchup_thumbs.svg", None)
 
     asyncio.run(_run())
 
+    # T-15-XSS: chain never selects 'spot' or 'svg' variant keys — only logo_url
+    # (the SVG URL) is fetched as the terminal fallback.
     assert fetched_urls, "Expected at least one fetch call"
-    for url in fetched_urls:
-        assert url != svg_url, (
-            f"SVG URL must NEVER be fetched at render time (T-15-XSS). "
-            f"Got fetched_urls={fetched_urls}"
-        )
-    # Exactly the spot PNG (logo_url) should have been fetched
-    assert spot_png_url in fetched_urls, (
-        f"Expected spot PNG URL '{spot_png_url}' to be fetched as fallback. "
+    assert svg_url in fetched_urls, (
+        f"Expected SVG URL '{svg_url}' to be fetched as terminal logo_url "
+        f"fallback (D-19). Got fetched_urls={fetched_urls}"
+    )
+    # Neither 'spot' nor 'svg' key from logo_variants should trigger a direct fetch.
+    # The chain only tries (variant, 'dark', 'default') — none equal 'spot'/'svg'.
+    assert fetched_urls == [svg_url], (
+        f"Expected only logo_url SVG fetch (chain skipped 'spot'/'svg' variant keys). "
         f"Got fetched_urls={fetched_urls}"
+    )
+
+    # D-19 seam B: loader called rasterize_svg_if_needed on the fetched SVG bytes.
+    assert rasterize_called_with, (
+        "Expected rasterize_svg_if_needed to be called in the loader's lazy-fetch path"
+    )
+    assert rasterize_called_with[0] == fake_svg, (
+        "Expected rasterize_svg_if_needed to receive the fetched SVG bytes"
+    )
+
+    # Verify Redis was given PNG bytes (not SVG bytes) — D-19 seam B invariant.
+    assert redis_mock.set.called, "Expected redis.set to be called (cache update)"
+    cached_bytes: bytes = redis_mock.set.call_args[0][1]
+    assert cached_bytes.startswith(b"\x89PNG"), (
+        f"Expected PNG magic header in cached bytes (D-19). "
+        f"Got {cached_bytes[:4]!r}"
     )

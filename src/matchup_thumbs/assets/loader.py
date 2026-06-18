@@ -136,7 +136,15 @@ async def _load_one_logo(
                 resp = await http_client.get(fetch_url)
                 resp.raise_for_status()
                 raw = resp.content
+                # Rasterize SVG→PNG off the event loop before caching (D-19 seam B —
+                # lazy-fetch path).  PNG bytes pass through unchanged (D-22 ESPN no-op).
+                # Lazy import: svg.py top-level import raises OSError when libcairo2 is
+                # absent; deferring to call-time keeps loader.py importable everywhere.
+                from ..svg import rasterize_svg_if_needed
+
+                raw = await anyio.to_thread.run_sync(rasterize_svg_if_needed, raw)
                 # Re-cache under the variant-suffixed key with the same TTL (CACHE-01).
+                # The cached value is always PNG bytes (never SVG bytes).
                 await redis.set(key, raw, ex=settings.logo_cache_ttl)
             except Exception as exc:
                 await logger.aerror(

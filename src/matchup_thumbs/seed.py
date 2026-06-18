@@ -40,6 +40,7 @@ import re
 from collections.abc import Sequence
 from typing import Final
 
+import anyio
 import httpx
 import structlog
 from psycopg.types.json import Jsonb
@@ -357,21 +358,38 @@ async def _resolve_logo_bytes(
     semaphore: asyncio.Semaphore,
     league_slug: str,
 ) -> bytes:
-    """Resolve logo bytes via the D-10 fallback chain.
+    """Resolve logo bytes via the D-10 fallback chain, rasterizing SVGs if needed.
 
     1. ``team.logo_url`` is the best href selected by the provider.
     2. ``fetch_logo_bytes`` fetches from the CDN (semaphore + jitter +
        tenacity retry on 429/5xx).
-    3. On any fetch error OR when no usable URL exists, fall back to the bundled
+    3. ``rasterize_svg_if_needed`` is called off the event loop via
+       ``anyio.to_thread.run_sync`` (D-19 seam A — pre-warms PNG bytes not SVG
+       bytes into Redis; ESPN PNG bytes pass through unchanged, D-22).
+    4. On any fetch error OR when no usable URL exists, fall back to the bundled
        placeholder PNG (``get_placeholder_logo()``).
+
+    Rasterization only applies to the successfully-fetched bytes (success path).
+    A fetch failure still returns the placeholder PNG — the placeholder is always
+    valid PNG and if ever passed through rasterize_svg_if_needed it would be a
+    no-op, but rasterization is deliberately kept only on the success path to
+    avoid changing the failure behaviour.
     """
     if team.logo_url is None:
         return get_placeholder_logo()
 
     try:
-        return await fetch_logo_bytes(
+        raw = await fetch_logo_bytes(
             http_client, team.logo_url, semaphore, settings.espn_jitter_max
         )
+        # Rasterize off the event loop (Pitfall 1 — cairosvg is CPU-bound).
+        # svg.py is imported lazily so seed.py loads even when libcairo2 is
+        # absent (the import is deferred to _resolve_logo_bytes call time;
+        # if libcairo2 is absent the OSError propagates here, which is caught
+        # by the except block and returns the placeholder — graceful degradation).
+        from .svg import rasterize_svg_if_needed
+
+        return await anyio.to_thread.run_sync(rasterize_svg_if_needed, raw)
     except Exception as exc:
         await logger.aerror(
             "logo_fetch_failed",
