@@ -27,10 +27,14 @@ class MLBTeamEntry(BaseModel):
     abbreviation: str  # e.g. "TOL" → abbreviation
     teamName: str  # mascot e.g. "Mud Hens" → name, short_display_name (Pitfall 7)
     locationName: str  # city e.g. "Toledo" → location
-    clubName: str  # club name e.g. "Mud Hens" → name (Pitfall 7)
     active: bool = True
 
-    # Optional — shortName unreliable across all teams (Assumption A1)
+    # Optional — tolerated-but-unused by the provider; do not fail-loudly on
+    # drift. clubName is never read by providers/mlb.py (the mapping uses
+    # teamName per Pitfall 7), so an upstream rename/removal of this unread
+    # field must not abort the whole league seed (WR-01). shortName is
+    # unreliable across all teams (Assumption A1).
+    clubName: str | None = None
     shortName: str | None = None
 
 
