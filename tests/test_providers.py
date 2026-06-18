@@ -189,11 +189,24 @@ def test_milb_sport_ids_is_gate() -> None:
 def test_mlb_fetch_teams_returns_provider_teams(httpx_mock: Any) -> None:
     """MILB-01: fetch_teams maps MLB Stats API JSON → ProviderTeam list.
 
-    Uses pytest-httpx to intercept the statsapi.mlb.com call.
-    Loads fixture from tests/fixtures/mlb_aaa_response.json (captured live).
-    Verifies Toledo Mud Hens is present with correct field mapping.
+    Updated for D-19/D-20 (15-06): logo_url is now the SVG primary mark (.svg),
+    and primary_color is palette-extracted from the rasterized SVG (not None).
+
+    Uses pytest-httpx to intercept the statsapi.mlb.com call AND all SVG CDN
+    fetches (one per team).  The offline mlb_512.svg fixture is returned for
+    every SVG GET so palette extraction runs without network (cairosvg skipif
+    guard applies: test is skipped when libcairo2 is absent).
     """
     import asyncio
+    import re as _re
+
+    # Skip early (before registering mocks) if libcairo2 is absent locally.
+    # Palette extraction requires cairosvg which raises OSError (not ImportError)
+    # when libcairo2.so.2 is missing — same guard pattern as test_svg_raster.py.
+    try:
+        import cairosvg as _cs  # type: ignore[import-untyped]  # noqa: F401
+    except OSError:
+        pytest.skip("libcairo2 not installed locally — skipping raster-dependent test")
 
     _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
     _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
@@ -204,12 +217,26 @@ def test_mlb_fetch_teams_returns_provider_teams(httpx_mock: Any) -> None:
     fixture_path = Path(__file__).parent / "fixtures" / "mlb_aaa_response.json"
     fixture_data: dict[str, Any] = json.loads(fixture_path.read_text())
 
+    svg_fixture_bytes = (
+        Path(__file__).parent / "fixtures" / "mlb_512.svg"
+    ).read_bytes()
+
     sport_id = _MILB_SPORT_IDS["milb-aaa"]
-    url = (
+    stats_url = (
         f"{_settings.mlb_statsapi_base_url}/api/v1/teams"
         f"?sportId={sport_id}&activeStatus=Y"
     )
-    httpx_mock.add_response(url=url, json=fixture_data)
+    # Mock the MLB Stats API response
+    httpx_mock.add_response(url=stats_url, json=fixture_data)
+
+    # Mock all SVG CDN fetches (one per team) with the offline fixture.
+    # Pattern matches any URL on www.mlbstatic.com/team-logos/*.svg.
+    # is_reusable=True so a single registration matches all 20+ team SVG GETs.
+    httpx_mock.add_response(
+        url=_re.compile(r"https://www\.mlbstatic\.com/team-logos/\d+\.svg"),
+        content=svg_fixture_bytes,
+        is_reusable=True,
+    )
 
     import httpx as _httpx
 
@@ -229,21 +256,35 @@ def test_mlb_fetch_teams_returns_provider_teams(httpx_mock: Any) -> None:
     assert toledo.location == "Toledo"
     assert toledo.name == "Mud Hens"
     assert toledo.slug == "toledo-mud-hens"
-    # D-14: no color data from MLB Stats API
-    assert toledo.primary_color is None
-    assert toledo.secondary_color is None
-    # D-11: logo_url is spot PNG
+    # D-20: primary_color is now palette-extracted from rasterized SVG (not None)
+    assert toledo.primary_color is not None, (
+        "Expected palette-extracted primary_color for MiLB team (D-20). "
+        "Got None — check SVG fixture has opaque non-white pixels."
+    )
+    # D-19: logo_url is the SVG primary mark (not spot PNG)
     assert toledo.logo_url is not None
-    assert "/spots/500" in toledo.logo_url
+    assert toledo.logo_url.endswith(".svg"), (
+        f"Expected logo_url to end with '.svg' (D-19), got {toledo.logo_url!r}"
+    )
 
 
 def test_mlb_logo_url_and_variants_mapping(httpx_mock: Any) -> None:
-    """MILB-04: logo_url is spot PNG; logo_variants['svg'] is SVG URL.
+    """MILB-04: logo_url is SVG primary mark; logo_variants has 'spot' + 'svg' keys.
 
-    No 'default' or 'dark' key in logo_variants (those are ESPN-specific).
-    The 'svg' key is stored but never selected for rasterized rendering.
+    Updated for D-19/D-21 (15-06):
+    - logo_url is now the SVG primary-mark URL (ends with .svg), NOT the spot PNG.
+    - logo_variants carries BOTH 'spot' (spot PNG) and 'svg' (SVG mark) for provenance.
+    - No 'default' or 'dark' key (those are ESPN-specific).
+    - The loader chain never selects 'spot' or 'svg' for direct rendering (T-15-XSS).
     """
     import asyncio
+    import re as _re
+
+    # Skip early (before registering mocks) if libcairo2 is absent locally.
+    try:
+        import cairosvg as _cs  # type: ignore[import-untyped]  # noqa: F401
+    except OSError:
+        pytest.skip("libcairo2 not installed locally — skipping raster-dependent test")
 
     _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
     _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
@@ -254,12 +295,23 @@ def test_mlb_logo_url_and_variants_mapping(httpx_mock: Any) -> None:
     fixture_path = Path(__file__).parent / "fixtures" / "mlb_aaa_response.json"
     fixture_data: dict[str, Any] = json.loads(fixture_path.read_text())
 
+    svg_fixture_bytes = (
+        Path(__file__).parent / "fixtures" / "mlb_512.svg"
+    ).read_bytes()
+
     sport_id = _MILB_SPORT_IDS["milb-aaa"]
-    url = (
+    stats_url = (
         f"{_settings.mlb_statsapi_base_url}/api/v1/teams"
         f"?sportId={sport_id}&activeStatus=Y"
     )
-    httpx_mock.add_response(url=url, json=fixture_data)
+    httpx_mock.add_response(url=stats_url, json=fixture_data)
+
+    # Mock all per-team SVG GET requests with the offline fixture bytes.
+    httpx_mock.add_response(
+        url=_re.compile(r"https://www\.mlbstatic\.com/team-logos/\d+\.svg"),
+        content=svg_fixture_bytes,
+        is_reusable=True,
+    )
 
     import httpx as _httpx
 
@@ -272,20 +324,30 @@ def test_mlb_logo_url_and_variants_mapping(httpx_mock: Any) -> None:
     assert teams, "Expected at least one team"
 
     team = teams[0]
-    # logo_url must be the spot PNG (ends with /spots/500)
+    # D-19: logo_url is the SVG primary mark (ends with .svg, NOT /spots/500)
     assert team.logo_url is not None
-    assert team.logo_url.endswith("/spots/500"), (
-        f"Expected logo_url to end with '/spots/500', got {team.logo_url!r}"
+    assert team.logo_url.endswith(".svg"), (
+        f"Expected logo_url to end with '.svg' (D-19), got {team.logo_url!r}"
     )
-    # logo_variants must have 'svg' key with .svg URL
+    # D-21: logo_variants must have BOTH 'spot' and 'svg' keys
     assert team.logo_variants is not None
+    assert "spot" in team.logo_variants, (
+        f"Expected 'spot' key in logo_variants (D-21), "
+        f"got keys: {list(team.logo_variants.keys())}"
+    )
+    assert team.logo_variants["spot"].endswith("/spots/500"), (
+        f"Expected 'spot' URL ending in '/spots/500', "
+        f"got {team.logo_variants['spot']!r}"
+    )
     assert "svg" in team.logo_variants, (
-        f"Expected 'svg' key in logo_variants, got keys: {list(team.logo_variants.keys())}"
+        f"Expected 'svg' key in logo_variants (D-21), "
+        f"got keys: {list(team.logo_variants.keys())}"
     )
     assert team.logo_variants["svg"].endswith(".svg"), (
-        f"Expected SVG URL ending in .svg, got {team.logo_variants['svg']!r}"
+        f"Expected 'svg' URL ending in '.svg', got {team.logo_variants['svg']!r}"
     )
-    # No ESPN-style 'default' or 'dark' keys in logo_variants
+    # T-15-XSS: No ESPN-style 'default' or 'dark' keys in logo_variants — the loader
+    # chain (variant→dark→default→logo_url) must never select 'spot' or 'svg'.
     assert "default" not in team.logo_variants, (
         "logo_variants must not contain 'default' key for MiLB teams"
     )

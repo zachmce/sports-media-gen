@@ -9,17 +9,34 @@ MiLB sportId SSRF gate (T-i3r-01)
 KNOWN_LEAGUES-validated slug to an integer sportId.  No user-supplied string
 ever reaches the URL — the dict lookup is the gate.  Mirrors
 ``_NCAA_SPORTBANNER_SPORTS`` in ``providers/espn.py``.
+
+Rasterize-once / palette-extraction pattern (D-19, D-20, 15-06)
+----------------------------------------------------------------
+``fetch_teams`` fetches each team's SVG mark bytes once, rasterizes off the
+event loop via ``anyio.to_thread.run_sync`` (Pitfall 1 — cairosvg is
+CPU-bound), and calls ``extract_palette`` on the rasterized image to derive
+``primary_color`` / ``secondary_color`` (bare 6-digit hex, no '#' prefix —
+seed.py normalises to '#hex' per existing convention).  On any fetch or
+rasterisation failure the team's colors remain ``None`` (MILB-05 safety net)
+and the seed continues without aborting the whole league.
 """
 
 from __future__ import annotations
 
+import asyncio
+import functools
+import io
 import re
 from typing import Final
 
+import anyio
 import httpx
 import structlog
+from PIL import Image
 
+from ..espn.client import fetch_logo_bytes
 from ..mlb.client import fetch_mlb_teams
+from ..mlb.palette import extract_palette
 from ..settings import settings
 from .types import ProviderLogoShield, ProviderTeam
 
@@ -51,6 +68,60 @@ def _derive_mlb_slug(location_name: str, team_name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
 
 
+async def _extract_team_colors(
+    client: httpx.AsyncClient,
+    svg_url: str,
+    semaphore: asyncio.Semaphore,
+    team_slug: str,
+) -> tuple[str | None, str | None]:
+    """Fetch SVG mark bytes, rasterize once off the event loop, and extract palette.
+
+    This is the "rasterize-once" seam: the same SVG URL is used for both
+    logo_url (seed pre-warm path) and palette extraction (D-19/D-20).  Two
+    fetches per team during seed is the accepted minor overhead (Pitfall 7).
+
+    On any failure (network error, rasterisation error, palette error) returns
+    ``(None, None)`` so the team still seeds with the neutral-grey fallback
+    (MILB-05) and the whole league is never aborted.
+
+    Args:
+        client:    Shared ``httpx.AsyncClient`` (D-02).
+        svg_url:   The team's SVG primary-mark URL.
+        semaphore: Shared concurrency limiter (mirrors seed.run() semaphore).
+        team_slug: For log context only.
+
+    Returns:
+        ``(primary_hex, secondary_hex)`` bare 6-digit lowercase hex strings, or
+        ``(None, None)`` on any error.
+    """
+    try:
+        # Lazy import: svg.py imports cairosvg at module level which raises OSError
+        # when libcairo2 is absent (not an ImportError — normal skipif pattern).
+        # Deferring to call-time means the provider still loads and list_leagues()
+        # / the registry work fine; only palette extraction is skipped locally.
+        from ..svg import rasterize_svg_to_square_png
+
+        svg_bytes = await fetch_logo_bytes(
+            client, svg_url, semaphore, settings.espn_jitter_max
+        )
+        # Rasterise off the event loop (Pitfall 1 — cairosvg is CPU-bound).
+        # functools.partial binds svg_bytes so the callable takes no args.
+        png_bytes: bytes = await anyio.to_thread.run_sync(
+            functools.partial(rasterize_svg_to_square_png, svg_bytes)
+        )
+        logo_img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        primary_hex, secondary_hex = extract_palette(logo_img)
+        return primary_hex, secondary_hex
+    except Exception as exc:
+        await logger.awarning(
+            "mlb_palette_extraction_failed",
+            url=svg_url,
+            team=team_slug,
+            error=str(exc),
+        )
+        return None, None
+
+
 class MLBStatsProvider:
     """Concrete DataProvider for the free, key-free MLB Stats API.
 
@@ -77,6 +148,11 @@ class MLBStatsProvider:
     ) -> list[ProviderTeam]:
         """Fetch active MiLB teams for a level and return canonical ProviderTeam models.
 
+        Each team's SVG mark is fetched once (rasterize-once, D-19/D-20) to
+        derive palette colors.  A per-league semaphore mirrors seed.run()'s
+        concurrency control.  Per-team SVG fetch failures set colors to None
+        (MILB-05) without aborting the league.
+
         Args:
             client:      Shared ``httpx.AsyncClient`` (D-02).
             league_slug: One of the 4 supported slugs (KNOWN_LEAGUES gate applied
@@ -96,28 +172,46 @@ class MLBStatsProvider:
         response = await fetch_mlb_teams(
             client, settings.mlb_statsapi_base_url, sport_id
         )
-        return [
-            ProviderTeam(
-                provider_id=str(entry.id),  # int → str (Pitfall 8)
-                slug=_derive_mlb_slug(entry.locationName, entry.teamName),
-                display_name=entry.name,
-                abbreviation=entry.abbreviation,
-                short_display_name=entry.teamName,  # mascot (Pitfall 7)
-                location=entry.locationName,
-                name=entry.teamName,  # mascot (Pitfall 7)
-                primary_color=None,  # MLB API has no colors (D-14)
-                secondary_color=None,
-                logo_url=(
-                    f"{settings.mlb_spots_base_url}/v1/team/{entry.id}/spots/500"
-                ),
-                logo_variants={
-                    "svg": f"{settings.mlb_logos_base_url}/{entry.id}.svg"
-                },
-                is_active=entry.active,
+
+        # Semaphore mirrors seed.run()'s espn_semaphore_size (D-08 pattern).
+        semaphore = asyncio.Semaphore(settings.espn_semaphore_size)
+
+        active_entries = [e for e in response.teams if e.active]
+
+        teams: list[ProviderTeam] = []
+        for entry in active_entries:
+            svg_url = f"{settings.mlb_logos_base_url}/{entry.id}.svg"
+            spot_url = f"{settings.mlb_spots_base_url}/v1/team/{entry.id}/spots/500"
+            slug = _derive_mlb_slug(entry.locationName, entry.teamName)
+
+            # Rasterize-once: fetch SVG bytes → rasterize off event loop →
+            # extract palette.  Colors are bare hex (no '#'); seed.py
+            # normalises to '#hex'.  On any failure → (None, None) / MILB-05.
+            primary_color, secondary_color = await _extract_team_colors(
+                client, svg_url, semaphore, slug
             )
-            for entry in response.teams
-            if entry.active
-        ]
+
+            teams.append(
+                ProviderTeam(
+                    provider_id=str(entry.id),  # int → str (Pitfall 8)
+                    slug=slug,
+                    display_name=entry.name,
+                    abbreviation=entry.abbreviation,
+                    short_display_name=entry.teamName,  # mascot (Pitfall 7)
+                    location=entry.locationName,
+                    name=entry.teamName,  # mascot (Pitfall 7)
+                    primary_color=primary_color,   # D-20: palette-extracted bare hex
+                    secondary_color=secondary_color,
+                    logo_url=svg_url,              # D-19: SVG primary mark
+                    logo_variants={
+                        "spot": spot_url,          # D-21: spot PNG for provenance
+                        "svg": svg_url,            # D-21: SVG URL for provenance
+                    },
+                    is_active=entry.active,
+                )
+            )
+
+        return teams
 
     async def fetch_league_shield(
         self,
