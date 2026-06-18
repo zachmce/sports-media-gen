@@ -319,6 +319,41 @@ class TestSSRFGate:
             sys.modules.pop("matchup_thumbs.svg", None)
             sys.modules.pop("cairosvg", None)
 
+    def test_unsafe_false_passed_to_square_png(self) -> None:
+        """rasterize_svg_to_square_png passes unsafe=False to svg2png (WR-03).
+
+        This is the path the MLB provider uses for palette extraction
+        (providers/mlb.py → rasterize_svg_to_square_png), so the SSRF/XXE gate
+        must be asserted here too — a future refactor of the square path could
+        otherwise silently drop the flag with every test staying green.
+        """
+        received_unsafe: list[object] = []
+
+        def _stub_svg2png(
+            bytestring: bytes | None = None,
+            output_width: int | None = None,
+            unsafe: object = "MISSING",
+        ) -> bytes:
+            received_unsafe.append(unsafe)
+            return _REAL_PNG
+
+        stub = types.ModuleType("cairosvg")
+        stub.svg2png = _stub_svg2png  # type: ignore[attr-defined]
+        sys.modules.pop("matchup_thumbs.svg", None)
+        sys.modules["cairosvg"] = stub
+        try:
+            import importlib
+
+            svg_mod = importlib.import_module("matchup_thumbs.svg")
+            svg_mod.rasterize_svg_to_square_png(_MINIMAL_SVG)
+            assert received_unsafe == [False], (
+                "rasterize_svg_to_square_png must call svg2png with unsafe=False "
+                "(SSRF/XXE safe mode) — this is the MLB palette-extraction path"
+            )
+        finally:
+            sys.modules.pop("matchup_thumbs.svg", None)
+            sys.modules.pop("cairosvg", None)
+
 
 # ---------------------------------------------------------------------------
 # Rasterization tests (require real cairosvg + libcairo2)
