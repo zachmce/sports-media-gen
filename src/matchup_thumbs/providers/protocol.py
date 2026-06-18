@@ -28,12 +28,19 @@ class DataProvider(Protocol):
     (D-02).  Providers do not own or create their own client; the caller (seed.py)
     creates the client in ``_amain()`` and passes it down.
 
+    Attribute surface (D-03):
+    - ``provider_name`` — short string identifier used by seed.py to populate
+      the ``teams.provider`` discriminator column (Pitfall 3).  Both
+      ``ESPNProvider`` and ``MLBStatsProvider`` declare this as a class attribute.
+
     Method surface (D-03):
     - ``list_leagues`` — synchronous; returns the slugs this provider covers.
     - ``fetch_teams``  — async; returns provider-neutral canonical team models.
     - ``fetch_league_shield`` — async; returns provider-neutral shield data including
       pre-fetched bytes so seed.py stays provider-neutral.
     """
+
+    provider_name: str
 
     def list_leagues(self) -> list[str]: ...
 

@@ -263,7 +263,9 @@ async def run(
             )
 
             # --- Team upsert (D-03 idempotent, keyed on (league_id, slug)) ---
-            # SQL stays parameterized: %(provider_id)s — no f-string SQL (T-14-04).
+            # SQL stays parameterized: %(provider_id)s, %(provider)s — no f-string SQL
+            # (T-14-04, T-15-INJ).  %(provider)s sourced from provider.provider_name
+            # (Pitfall 3 — without it MiLB rows silently inherit server_default='espn').
             async with pool.connection() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute(
@@ -271,11 +273,11 @@ async def run(
                         INSERT INTO teams
                             (league_id, slug, display_name, abbreviation,
                              primary_color, secondary_color, logo_url, provider_id,
-                             logo_variants)
+                             logo_variants, provider)
                         VALUES (%(league_id)s, %(slug)s, %(display_name)s,
                                 %(abbreviation)s, %(primary_color)s,
                                 %(secondary_color)s, %(logo_url)s, %(provider_id)s,
-                                %(logo_variants)s)
+                                %(logo_variants)s, %(provider)s)
                         ON CONFLICT (league_id, slug) DO UPDATE SET
                             display_name    = EXCLUDED.display_name,
                             abbreviation    = EXCLUDED.abbreviation,
@@ -283,7 +285,8 @@ async def run(
                             secondary_color = EXCLUDED.secondary_color,
                             logo_url        = EXCLUDED.logo_url,
                             provider_id     = EXCLUDED.provider_id,
-                            logo_variants   = EXCLUDED.logo_variants
+                            logo_variants   = EXCLUDED.logo_variants,
+                            provider        = EXCLUDED.provider
                         RETURNING id
                         """,
                         {
@@ -296,6 +299,7 @@ async def run(
                             "logo_url": team.logo_url,
                             "provider_id": team.provider_id,
                             "logo_variants": Jsonb(team.logo_variants),
+                            "provider": provider.provider_name,
                         },
                     )
                     team_row = await cur.fetchone()
