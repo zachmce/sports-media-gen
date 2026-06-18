@@ -54,7 +54,23 @@ _MILB_SPORT_IDS: Final[dict[str, int]] = {
     "milb-aa": 12,
     "milb-high-a": 13,
     "milb-single-a": 14,
+    "milb-rookie": 16,  # Rookie: DSL (51) + ACL (15) + FCL (15) all under sportId=16
 }
+
+# Fixed complex-tag dict keyed by MLB Stats API league.id (integer — immune to
+# name drift).  Source: live statsapi.mlb.com query 2026-06-18.
+# T-i3r-01 SSRF gate: the integer from this dict is used only in slug/alias
+# derivation — never in any URL.  Mirrors _MILB_SPORT_IDS / _NCAA_SPORTBANNER_SPORTS.
+_MILB_COMPLEX_TAG_IDS: Final[dict[int, str]] = {
+    130: "dsl",  # Dominican Summer League
+    121: "acl",  # Arizona Complex League
+    124: "fcl",  # Florida Complex League
+}
+
+# Leading tokens the MLB Stats API embeds in Rookie teamName values.
+# Used by _derive_rookie_slug to strip the prefix before slug derivation
+# and by the D-04 name-sniff fallback when league.id is absent.
+_COMPLEX_PREFIXES: Final[tuple[str, ...]] = ("DSL ", "ACL ", "FCL ")
 
 # MiLB league shield (center "VS" slot). The MLB Stats API exposes no per-affiliate
 # league logo, so every MiLB level shares the single MiLB-wide mark — matching
@@ -74,6 +90,29 @@ def _derive_mlb_slug(location_name: str, team_name: str) -> str:
     consistency — but produces hyphen-separated (slug) not stripped (alias).
     """
     raw = f"{location_name} {team_name}".lower()
+    return re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+
+
+def _derive_rookie_slug(tag: str, team_name: str) -> str:
+    """Derive slug for a Rookie complex team: ``{tag}-{stripped_teamName}``.
+
+    Strips the leading DSL/ACL/FCL token from teamName (which the MLB Stats
+    API already embeds) then prepends the canonical tag from
+    ``_MILB_COMPLEX_TAG_IDS``.  Verified zero slug collisions across all 81
+    Rookie teams (2026-06-18).
+
+    Examples::
+
+        _derive_rookie_slug("dsl", "DSL CLE Goryl")  -> "dsl-cle-goryl"
+        _derive_rookie_slug("acl", "ACL Angels")      -> "acl-angels"
+        _derive_rookie_slug("fcl", "FCL Rays")        -> "fcl-rays"
+    """
+    stripped = team_name
+    for pfx in _COMPLEX_PREFIXES:
+        if team_name.startswith(pfx):
+            stripped = team_name[len(pfx) :]
+            break
+    raw = f"{tag}-{stripped}".lower()
     return re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
 
 
@@ -152,7 +191,7 @@ class MLBStatsProvider:
     provider_name: str = "mlb"
 
     def list_leagues(self) -> list[str]:
-        """Return the 4 MiLB level slugs this provider covers."""
+        """Return the 5 MiLB level slugs this provider covers."""
         return list(_MILB_SPORT_IDS.keys())
 
     async def fetch_teams(
@@ -169,7 +208,7 @@ class MLBStatsProvider:
 
         Args:
             client:      Shared ``httpx.AsyncClient`` (D-02).
-            league_slug: One of the 4 supported slugs (KNOWN_LEAGUES gate applied
+            league_slug: One of the 5 supported slugs (KNOWN_LEAGUES gate applied
                          upstream by seed.py before this call).
 
         Returns:
