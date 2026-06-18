@@ -59,6 +59,34 @@ _SVG_UNSAFE: bool = False
 # keeps the mark off the edge.  ESPN PNGs skip this path entirely (no-op).
 _SVG_RASTER_PAD_FRAC: float = 0.08
 
+# Localized decompression-bomb guard (WR-05).  Both _pad_transparent and
+# rasterize_svg_to_square_png Image.open() cairosvg output directly, bypassing
+# the shared _MAX_LOGO_PIXELS cap in assets/loader.py.  Today this is NOT
+# exploitable — cairosvg output width is pinned to _SVG_RASTER_SIZE (or the
+# explicit `size` arg), so the pixel count is bounded regardless of the SVG's
+# declared dimensions.  We still self-check the bound locally so the invariant
+# ("never Image.open un-capped bytes") holds even if a future change feeds these
+# helpers larger input.  k=3 comfortably covers the padded square path
+# (size + 2*pad) and any non-square aspect raster up to ~3× the nominal side.
+_SVG_BOMB_GUARD_K: int = 3
+_SVG_MAX_RASTER_PIXELS: int = (_SVG_RASTER_SIZE * _SVG_BOMB_GUARD_K) ** 2
+
+
+def _assert_within_raster_bound(img: Image.Image) -> None:
+    """Raise if a decoded raster exceeds the _SVG_RASTER_SIZE-derived pixel cap.
+
+    WR-05: a self-checking decompression-bomb guard local to svg.py, since these
+    decodes bypass the shared _MAX_LOGO_PIXELS cap in assets/loader.py.
+    """
+    pixels = img.width * img.height
+    if pixels > _SVG_MAX_RASTER_PIXELS:
+        msg = (
+            f"rasterized SVG ({img.width}x{img.height} = {pixels}px) exceeds the "
+            f"render-bomb bound of {_SVG_MAX_RASTER_PIXELS}px "
+            f"(_SVG_RASTER_SIZE={_SVG_RASTER_SIZE} x k={_SVG_BOMB_GUARD_K}, squared)"
+        )
+        raise ValueError(msg)
+
 
 def _pad_transparent(png_bytes: bytes) -> bytes:
     """Re-encode a rasterized PNG with a transparent margin around its content.
@@ -68,6 +96,7 @@ def _pad_transparent(png_bytes: bytes) -> bytes:
     drop shadow).  Pure CPU work — callers already wrap rasterization off the loop.
     """
     img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    _assert_within_raster_bound(img)  # WR-05 local decompression-bomb guard
     pad = round(img.width * _SVG_RASTER_PAD_FRAC)
     if pad <= 0:
         return png_bytes
@@ -144,6 +173,7 @@ def rasterize_svg_to_square_png(
         unsafe=_SVG_UNSAFE,
     )
     img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    _assert_within_raster_bound(img)  # WR-05 local decompression-bomb guard
     if img.size == (size, size):
         out: Image.Image = img
     else:
