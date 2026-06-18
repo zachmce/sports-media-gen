@@ -314,7 +314,12 @@ async def run(
 
                 # --- Alias upsert (D-11 / D-12) ---
                 async with conn.cursor() as cur:
-                    for alias in generate_aliases(team) + team.extra_aliases:
+                    # extra_aliases arrive raw from the provider; normalize them
+                    # so they obey the resolver invariant (aliases stored fully
+                    # normalized via normalize_input). Without this the prefixed
+                    # Rookie variants are dead rows the resolver never matches (WR-01).
+                    extra_norm = [normalize_input(a) for a in team.extra_aliases]
+                    for alias in generate_aliases(team) + extra_norm:
                         await cur.execute(
                             """
                             INSERT INTO team_aliases (team_id, league_id, alias)
