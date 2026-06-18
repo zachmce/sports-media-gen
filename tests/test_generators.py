@@ -748,38 +748,40 @@ def test_league_logo_contrast_outline_path_produces_different_render() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 15 Wave 0: MiLB generator scaffolds (MILB-05)
+# Phase 15 Wave 5: MiLB generator tests (MILB-05, D-20, 15-06)
 # ---------------------------------------------------------------------------
 
 
 def test_milb_colorless_team_renders() -> None:
-    """MILB-05: generator renders without crash when both team colors are None.
+    """MILB-05 null-color safety net: generator renders when both team colors are None.
 
-    MiLB teams have no color data from the MLB Stats API (D-14 confirmed).
-    The contrast engine must return the neutral-grey fallback (NULL_PRIMARY)
-    when both primary_color and secondary_color are None.  This test drives
-    that path end-to-end through generate_thumb_style0 — no golden image
-    is used (D-18: no render_version change for this path).
+    MiLB teams now have palette-extracted colors (D-20), but the neutral-grey
+    fallback must still engage when extraction yields None (e.g. all-transparent
+    logo, all-white logo, or cairosvg unavailable in a degraded environment).
+    This test keeps both colors as None to exercise the full MILB-05 path.
 
-    Mirrors test_null_color_fallback but uses MiLB-representative team dicts
-    (both colors None, provider='mlb') to confirm the fallback path is correct
-    for all MiLB teams without exception.
+    Kept as the safety-net test (D-18: no render_version change); the new colored
+    path is covered by test_milb_colored_team_renders below (D-20).
     """
     from matchup_thumbs.generators._color import NULL_PRIMARY as _NULL_PRIMARY
     from matchup_thumbs.generators.thumb import generate_thumb_style0
 
-    # MiLB-style teams: no color data (D-14)
+    # MiLB-style teams with no colors (e.g. palette extraction failed → MILB-05).
+    # Updated logo_variants to D-21 format (spot + svg keys for provenance).
     mud_hens: dict[str, Any] = {
         "id": 1,
         "league_id": 99,
         "slug": "toledo-mud-hens",
         "display_name": "Toledo Mud Hens",
         "abbreviation": "TOL",
-        "primary_color": None,      # D-14: MLB Stats API has no colors
+        "primary_color": None,       # null-color path — MILB-05 safety net
         "secondary_color": None,
-        "logo_url": None,
+        "logo_url": "https://www.mlbstatic.com/team-logos/512.svg",  # D-19
         "provider_id": "512",
-        "logo_variants": {"svg": "https://www.mlbstatic.com/team-logos/512.svg"},
+        "logo_variants": {           # D-21: both spot + svg provenance keys
+            "spot": "https://midfield.mlbstatic.com/v1/team/512/spots/500",
+            "svg": "https://www.mlbstatic.com/team-logos/512.svg",
+        },
     }
     clippers_aaa: dict[str, Any] = {
         "id": 2,
@@ -789,9 +791,12 @@ def test_milb_colorless_team_renders() -> None:
         "abbreviation": "COL",
         "primary_color": None,
         "secondary_color": None,
-        "logo_url": None,
+        "logo_url": "https://www.mlbstatic.com/team-logos/564.svg",  # D-19
         "provider_id": "564",
-        "logo_variants": {"svg": "https://www.mlbstatic.com/team-logos/564.svg"},
+        "logo_variants": {
+            "spot": "https://midfield.mlbstatic.com/v1/team/564/spots/500",
+            "svg": "https://www.mlbstatic.com/team-logos/564.svg",
+        },
     }
 
     # Simulate the contrast engine's null-color decision path (CTR-05):
@@ -811,4 +816,93 @@ def test_milb_colorless_team_renders() -> None:
     assert top_left[:3] == _NULL_PRIMARY, (
         f"Expected neutral-grey {_NULL_PRIMARY!r} at (0,0) for colorless MiLB team, "
         f"got {top_left[:3]!r}"
+    )
+
+
+def test_milb_colored_team_renders() -> None:
+    """D-20: generator renders a non-grey background when MiLB team has palette colors.
+
+    Post-UAT (15-06): MiLB teams now carry palette-extracted primary/secondary
+    colors derived from their rasterized SVG primary mark.  This test verifies
+    that a MiLB-style team with a real bare-hex primary_color (e.g. Toledo Mud
+    Hens navy "002b5c") produces a colored background that is visually distinct
+    from the neutral-grey NULL_PRIMARY fallback — proving team-colored backgrounds
+    now engage for MiLB.
+
+    No golden image used (D-22: no render_version bump; ESPN goldens unchanged).
+    """
+    from matchup_thumbs.generators._color import NULL_PRIMARY as _NULL_PRIMARY
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+
+    # Toledo Mud Hens with palette-extracted colors (D-20 representative values).
+    # primary_color is a bare 6-digit hex string — seed.py would normalise to
+    # '#002b5c' before DB storage; the generator receives the '#'-prefixed form
+    # from the DB.  The team dict (from resolver) carries '#'-prefixed strings.
+    mud_hens_colored: dict[str, Any] = {
+        "id": 1,
+        "league_id": 99,
+        "slug": "toledo-mud-hens",
+        "display_name": "Toledo Mud Hens",
+        "abbreviation": "TOL",
+        "primary_color": "#002b5c",   # D-20: navy blue (Toledo palette)
+        "secondary_color": "#fdb913",  # D-20: gold
+        "logo_url": "https://www.mlbstatic.com/team-logos/512.svg",  # D-19
+        "provider_id": "512",
+        "logo_variants": {            # D-21: both spot + svg provenance keys
+            "spot": "https://midfield.mlbstatic.com/v1/team/512/spots/500",
+            "svg": "https://www.mlbstatic.com/team-logos/512.svg",
+        },
+    }
+    durham_bulls_colored: dict[str, Any] = {
+        "id": 2,
+        "league_id": 99,
+        "slug": "durham-bulls",
+        "display_name": "Durham Bulls",
+        "abbreviation": "DUR",
+        "primary_color": "#1b3a6b",   # D-20: Durham navy (representative)
+        "secondary_color": "#c8102e",  # D-20: Durham red
+        "logo_url": "https://www.mlbstatic.com/team-logos/234.svg",  # D-19
+        "provider_id": "234",
+        "logo_variants": {
+            "spot": "https://midfield.mlbstatic.com/v1/team/234/spots/500",
+            "svg": "https://www.mlbstatic.com/team-logos/234.svg",
+        },
+    }
+
+    # Colored MiLB decision: navy blue background (not NULL_PRIMARY grey).
+    navy_rgb: tuple[int, int, int] = (0, 43, 92)  # #002b5c
+    assets_colored = fixture_decoded_assets()
+    assets_colored["away_decision"] = make_decision(background_rgb=navy_rgb)
+    assets_colored["home_decision"] = make_decision(background_rgb=navy_rgb)
+
+    # Also render the null-color version for comparison (proves distinct output).
+    assets_grey = fixture_decoded_assets()
+    assets_grey["away_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+    assets_grey["home_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+
+    img_colored = generate_thumb_style0(
+        mud_hens_colored, durham_bulls_colored, assets_colored
+    )
+    img_grey = generate_thumb_style0(
+        mud_hens_colored, durham_bulls_colored, assets_grey
+    )
+
+    assert img_colored.size == (1280, 720), (
+        f"Expected 1280×720, got {img_colored.size!r} for colored MiLB render"
+    )
+
+    # Top-left pixel (solidly in away colour band) must be the team color, not grey.
+    top_left = img_colored.getpixel((0, 0))
+    assert top_left[:3] == navy_rgb, (
+        f"Expected navy {navy_rgb!r} at (0,0) for colored MiLB team (D-20), "
+        f"got {top_left[:3]!r}"
+    )
+    # And it must differ from the grey fallback — confirms colored backgrounds engage.
+    assert top_left[:3] != _NULL_PRIMARY, (
+        f"Colored MiLB team background must NOT be NULL_PRIMARY grey {_NULL_PRIMARY!r} "
+        f"(D-20 — team colors must engage). Got {top_left[:3]!r}"
+    )
+    # The colored render must produce a different image from the grey render (D-20).
+    assert img_colored.tobytes() != img_grey.tobytes(), (
+        "Colored MiLB render must differ from grey fallback render (D-20)"
     )
