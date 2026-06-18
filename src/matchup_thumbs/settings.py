@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # entries become unreachable and expire by their TTL — no flush needed, CACHE-07).
     # NOTE: nginx proxy_cache is NOT invalidated by this bump; its key is URL-based
     # and nginx entries expire on their own 30-day TTL (RESEARCH Pitfall 4).
-    render_version: int = 4  # v1.3 bump: 3 → 4 — league-logo + poster seam output
+    render_version: int = 5  # v2.0 bump: 4 → 5 — soft drop shadow replaces logo halo
     # (VS→logo replacement on thumb/poster and GaussianBlur poster seam changed
     #  rendered output; bump retires stale Redis :v3 blobs so deployed instances
     #  re-render instead of serving the old VS-wordmark PNGs until their 30-day TTL).

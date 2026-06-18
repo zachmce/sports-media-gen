@@ -306,23 +306,23 @@ def test_render_key_versioning() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CACHE-07/CACHE-08: render_version default must be 4 after the v1.3 bump
+# CACHE-07/CACHE-08: render_version default must be 5 after the v2.0 bump
 # ---------------------------------------------------------------------------
 
 
-def test_render_version_default_is_4() -> None:
-    """Settings.render_version defaults to 4 after the v1.3 league-logo bump (CACHE-08).
+def test_render_version_default_is_5() -> None:
+    """Settings.render_version defaults to 5 after the v2.0 drop-shadow bump (CACHE-08).
 
-    The v1.3 VS→logo replacement and poster GaussianBlur seam change rendered
-    output, so the default bumps 3 → 4: all pre-existing :v3 render cache
-    entries become unreachable on first post-deploy request without a Redis
-    flush, forcing a re-render with the new league-logo output.
+    The v2.0 logo treatment change (soft drop shadow replaces the dilated halo)
+    changed rendered output, so the default bumps 4 → 5: all pre-existing :v4
+    render cache entries become unreachable on first post-deploy request without a
+    Redis flush, forcing a re-render with the new shadow output.
     The nginx proxy_cache is NOT invalidated by this bump (its key is URL-based);
     nginx entries expire on their own 30-day TTL (RESEARCH Pitfall 4).
     """
     from matchup_thumbs.settings import Settings
 
-    assert Settings().render_version == 4
+    assert Settings().render_version == 5
 
 
 # ---------------------------------------------------------------------------

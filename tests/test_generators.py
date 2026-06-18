@@ -261,71 +261,70 @@ def test_apply_outline_preserves_size() -> None:
     assert result.size == logo.size
 
 
-def test_apply_outline_halo_present() -> None:
-    """_apply_outline makes transparent border pixels opaque (halo ring) (D-07).
+def test_apply_outline_shadow_present() -> None:
+    """_apply_outline casts a soft shadow into the transparent border (D-07).
 
-    A small solid mark placed in the center of a transparent canvas should gain
-    a visible halo of opaque pixels around its original border after _apply_outline.
+    A small solid mark on a transparent canvas should gain a visible
+    semi-transparent shadow just outside its border (offset down-right) after
+    _apply_outline.
     """
     from matchup_thumbs.generators._outline import _apply_outline
 
-    # Build a logo: 10x10 opaque mark, surrounded by transparent padding on 30x30.
+    # Build a logo: 10x10 opaque mark at (10,10)-(19,19), transparent padding on 30x30.
     canvas = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
     inner = Image.new("RGBA", (10, 10), (200, 50, 50, 255))
     canvas.paste(inner, (10, 10))
 
     result = _apply_outline(canvas, background_rgb=(200, 50, 50))
 
-    # The corner pixel (0,0) is far from the mark; it may or may not be halo depending
-    # on radius. But a pixel adjacent to the mark border (e.g., (9,9)) should be opaque
-    # after dilation with _OUTLINE_DILATION_RADIUS >= 1.
-    adjacent_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
-    assert adjacent_pixel[3] > 0, (
-        "Expected pixel adjacent to mark to be opaque after halo dilation"
+    # (22,22) is just outside the mark (ends at 19) in the offset-shadow direction;
+    # it must pick up the soft shadow (alpha>0) after offset+blur.
+    shadow_pixel = result.getpixel((22, 22))  # type: ignore[assignment]
+    assert shadow_pixel[3] > 0, (
+        "Expected a soft shadow (alpha>0) just outside the mark border"
     )
 
 
-def test_apply_outline_halo_color_dark_background() -> None:
-    """On a dark (near-black) background, _apply_outline picks white halo (D-08)."""
+def test_apply_outline_shadow_color_dark_background() -> None:
+    """On a dark (near-black) background, the drop shadow is white (D-08).
+
+    The treatment is now a soft, offset (down-right), blurred, semi-transparent
+    drop shadow (not a hard opaque ring).  The mark occupies (10..109) in a
+    120x120 canvas; the shadow is offset by _SHADOW_OFFSET so it falls just
+    OUTSIDE the bottom-right of the mark.  Sample (112,112): shadow-only region.
+    """
     from matchup_thumbs.generators._outline import _apply_outline
 
-    # Near-black background → white has higher contrast than black
+    # Near-black background → white has higher contrast than black.
     dark_bg: tuple[int, int, int] = (10, 10, 10)
-    logo = _make_solid_logo((255, 255, 255))  # white mark (clearly different)
-    # Place mark in center to ensure adjacent pixels get halo
+    logo = _make_solid_logo((255, 255, 255))  # white mark
     result = _apply_outline(logo, background_rgb=dark_bg)
 
-    # Find an opaque pixel that is NOT part of the original mark (the halo ring).
-    # The original mark occupies (10..109, 10..109) in a 120x120 canvas (per
-    # _make_solid_logo). Check pixel (9, 9) — one pixel outside the mark; after
-    # dilation it should be white (255,255,255).
-    halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
-    # (9,9) is one pixel outside the mark; dilation MUST make it opaque halo.
-    # Assert unconditionally so a broken/zero-radius dilation fails loudly (WR-04).
-    assert halo_pixel[3] == 255, (
-        f"Expected opaque halo at (9,9), got alpha={halo_pixel[3]}"
+    # (112,112) is outside the mark (ends at 109) but inside the offset shadow.
+    shadow_pixel = result.getpixel((112, 112))  # type: ignore[assignment]
+    assert shadow_pixel[3] > 0, (
+        f"Expected a soft shadow (alpha>0) at (112,112), got alpha={shadow_pixel[3]}"
     )
-    r = halo_pixel[0]
-    assert r > 128, f"Expected white halo on dark background, got r={r}"
+    r = shadow_pixel[0]
+    assert r > 128, f"Expected white drop shadow on dark background, got r={r}"
 
 
-def test_apply_outline_halo_color_light_background() -> None:
-    """On a near-white background, _apply_outline picks black halo (D-08)."""
+def test_apply_outline_shadow_color_light_background() -> None:
+    """On a near-white background, the drop shadow is black (D-08)."""
     from matchup_thumbs.generators._outline import _apply_outline
 
-    # Near-white background → black has higher contrast than white
+    # Near-white background → black has higher contrast than white.
     light_bg: tuple[int, int, int] = (245, 245, 245)
     logo = _make_solid_logo((0, 0, 0))  # black mark
     result = _apply_outline(logo, background_rgb=light_bg)
 
-    # Check adjacent pixel after dilation — should be dark (halo is black)
-    halo_pixel = result.getpixel((9, 9))  # type: ignore[assignment]
-    # Unconditional: dilation must make (9,9) opaque halo, else fail loudly (WR-04).
-    assert halo_pixel[3] == 255, (
-        f"Expected opaque halo at (9,9), got alpha={halo_pixel[3]}"
+    # (112,112): shadow-only region just outside the bottom-right of the mark.
+    shadow_pixel = result.getpixel((112, 112))  # type: ignore[assignment]
+    assert shadow_pixel[3] > 0, (
+        f"Expected a soft shadow (alpha>0) at (112,112), got alpha={shadow_pixel[3]}"
     )
-    r = halo_pixel[0]
-    assert r < 128, f"Expected black halo on light background, got r={r}"
+    r = shadow_pixel[0]
+    assert r < 128, f"Expected black drop shadow on light background, got r={r}"
 
 
 # ---------------------------------------------------------------------------
