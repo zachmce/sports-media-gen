@@ -46,8 +46,8 @@ _SKIP_REASON: str = (
 pg_required = pytest.mark.skipif(not _PG_AVAILABLE, reason=_SKIP_REASON)
 
 # Expected league slugs seeded by all migrations through head.
-# Updated for Phase 15: 0005 inserts 4 MiLB league rows (D-18 permitted edit).
-# Wave 0 note: test_leagues_seeded will be RED until migration 0005 is applied.
+# Updated for Phase 16: 0006 inserts milb-rookie league row.
+# Wave 0 note: test_leagues_seeded will be RED until migration 0006 is applied.
 _EXPECTED_LEAGUES: frozenset[str] = frozenset(
     {
         "nba",
@@ -60,6 +60,7 @@ _EXPECTED_LEAGUES: frozenset[str] = frozenset(
         "milb-aa",
         "milb-high-a",
         "milb-single-a",
+        "milb-rookie",  # Phase 16 — migration 0006
     }
 )
 
