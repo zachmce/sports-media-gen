@@ -83,6 +83,8 @@ class ESPNProvider:
     class never owns or creates an HTTP client (D-02).
     """
 
+    provider_name: str = "espn"
+
     def list_leagues(self) -> list[str]:
         """Return the list of league slugs this provider covers.
 
