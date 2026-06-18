@@ -4,12 +4,13 @@ Coverage:
 - PNG pass-through (rasterize_svg_if_needed is a no-op for PNG/JPEG/WebP bytes — D-22)
 - SVG→PNG rasterization (bytes start with PNG magic header)
 - SVG detection (leading-whitespace and <?xml …><svg> prefix forms)
-- SVG-SSRF blocking (T-15-SVG-SSRF): a url_fetcher blocks any non-data: URL
+- SVG-SSRF gate (T-15-SVG-SSRF): cairosvg is called with unsafe=False, which
+  blocks external entity resolution and external resource (network/file) fetches
 - Render-bomb bound (T-15-SVG-BOMB): output width == _SVG_RASTER_SIZE
 
 Tests that require the cairosvg runtime (i.e. libcairo2.so.2) are skipped
 automatically when the library is not available locally.  All rasterize_*
-tests are in this category.  The pass-through test and the url_fetcher
+tests are in this category.  The pass-through test and the unsafe-flag
 isolation test do NOT require cairosvg to be importable.
 """
 
@@ -179,7 +180,7 @@ class TestSVGDetection:
         def _stub_svg2png(
             bytestring: bytes | None = None,
             output_width: int | None = None,
-            url_fetcher: object = None,
+            **_kwargs: object,
         ) -> bytes:
             assert bytestring is not None
             call_log.append(bytestring)
@@ -212,7 +213,7 @@ class TestSVGDetection:
         def _stub_svg2png(
             bytestring: bytes | None = None,
             output_width: int | None = None,
-            url_fetcher: object = None,
+            **_kwargs: object,
         ) -> bytes:
             assert bytestring is not None
             call_log.append(bytestring)
@@ -240,7 +241,7 @@ class TestSVGDetection:
         def _stub_svg2png(
             bytestring: bytes | None = None,
             output_width: int | None = None,
-            url_fetcher: object = None,
+            **_kwargs: object,
         ) -> bytes:
             assert bytestring is not None
             call_log.append(bytestring)
@@ -262,64 +263,31 @@ class TestSVGDetection:
 
 
 # ---------------------------------------------------------------------------
-# SVG-SSRF blocking test (T-15-SVG-SSRF)
-# Tests the _blocking_url_fetcher directly — no real cairosvg call needed.
+# SVG-SSRF gate test (T-15-SVG-SSRF)
+# cairosvg 2.x svg2png has NO url_fetcher param; the supported SSRF/XXE control
+# is unsafe=False (safe mode blocks external entity + external-resource fetches).
+# These tests assert svg.py uses that control — no real cairosvg call needed.
 # ---------------------------------------------------------------------------
 
 
-class TestSSRFBlocking:
-    """The _blocking_url_fetcher must reject non-data: URLs (T-15-SVG-SSRF)."""
+class TestSSRFGate:
+    """svg.py must rasterize in cairosvg safe mode (unsafe=False) — T-15-SVG-SSRF."""
 
-    def _get_url_fetcher(self) -> object:
-        """Import _blocking_url_fetcher, injecting a stub if cairosvg is absent."""
-        sys.modules.pop("matchup_thumbs.svg", None)
-        if not _CAIROSVG_AVAILABLE:
-            sys.modules["cairosvg"] = _make_cairosvg_stub()
-        try:
-            import importlib
+    def test_svg_unsafe_flag_is_false(self) -> None:
+        """The module-level _SVG_UNSAFE flag must be False (safe mode)."""
+        svg_mod = _import_svg_module_with_stub()
+        assert svg_mod._SVG_UNSAFE is False
 
-            svg_mod = importlib.import_module("matchup_thumbs.svg")
-            fetcher = svg_mod._blocking_url_fetcher
-            return fetcher
-        finally:
-            sys.modules.pop("matchup_thumbs.svg", None)
-            if not _CAIROSVG_AVAILABLE:
-                sys.modules.pop("cairosvg", None)
-
-    def test_http_url_is_blocked(self) -> None:
-        """An http:// URL raises ValueError — no network fetch."""
-        fetcher = self._get_url_fetcher()
-        with pytest.raises(ValueError, match="SVG-SSRF blocked"):
-            fetcher("http://evil.example.com/logo.png")  # type: ignore[operator]
-
-    def test_https_url_is_blocked(self) -> None:
-        """An https:// URL raises ValueError."""
-        fetcher = self._get_url_fetcher()
-        with pytest.raises(ValueError, match="SVG-SSRF blocked"):
-            fetcher("https://www.mlbstatic.com/evil.svg")  # type: ignore[operator]
-
-    def test_file_url_is_blocked(self) -> None:
-        """A file:// URL raises ValueError."""
-        fetcher = self._get_url_fetcher()
-        with pytest.raises(ValueError, match="SVG-SSRF blocked"):
-            fetcher("file:///etc/passwd")  # type: ignore[operator]
-
-    def test_data_uri_is_allowed(self) -> None:
-        """A data: URI is allowed through (returns dict, not raises)."""
-        fetcher = self._get_url_fetcher()
-        result = fetcher("data:image/png;base64,abc123")  # type: ignore[operator]
-        assert isinstance(result, dict)
-
-    def test_url_fetcher_passed_to_svg2png(self) -> None:
-        """rasterize_svg_if_needed passes the blocking url_fetcher to svg2png."""
-        received_fetcher: list[object] = []
+    def test_unsafe_false_passed_to_svg2png(self) -> None:
+        """rasterize_svg_if_needed passes unsafe=False to svg2png (T-15-SVG-SSRF)."""
+        received_unsafe: list[object] = []
 
         def _stub_svg2png(
             bytestring: bytes | None = None,
             output_width: int | None = None,
-            url_fetcher: object = None,
+            unsafe: object = "MISSING",
         ) -> bytes:
-            received_fetcher.append(url_fetcher)
+            received_unsafe.append(unsafe)
             return _PNG_MAGIC + b"\r\n\x1a\nFAKE"
 
         stub = types.ModuleType("cairosvg")
@@ -331,8 +299,9 @@ class TestSSRFBlocking:
 
             svg_mod = importlib.import_module("matchup_thumbs.svg")
             svg_mod.rasterize_svg_if_needed(_MINIMAL_SVG)
-            assert len(received_fetcher) == 1
-            assert received_fetcher[0] is svg_mod._blocking_url_fetcher
+            assert received_unsafe == [False], (
+                "svg2png must be called with unsafe=False (SSRF/XXE safe mode)"
+            )
         finally:
             sys.modules.pop("matchup_thumbs.svg", None)
             sys.modules.pop("cairosvg", None)
@@ -382,9 +351,18 @@ class TestRasterization:
             f"Expected square output, got {img.width}x{img.height}"
         )
 
-    def test_ssrf_svg_with_external_image_raises(self) -> None:
-        """An SVG with <image href='http://…'> triggers the blocking url_fetcher."""
+    def test_ssrf_svg_with_external_image_does_not_fetch(self) -> None:
+        """An SVG with <image href='http://…'> rasterizes in safe mode without
+        fetching the external resource (T-15-SVG-SSRF).
+
+        With unsafe=False, cairosvg ignores the external reference rather than
+        making an outbound request — so rasterization succeeds and yields a PNG,
+        and no network call is made. We assert success + PNG output (a hung/raised
+        call would indicate cairosvg attempted the fetch)."""
         from matchup_thumbs.svg import rasterize_svg_if_needed
 
-        with pytest.raises(ValueError, match="SVG-SSRF blocked"):
-            rasterize_svg_if_needed(_SSRF_SVG)
+        result = rasterize_svg_if_needed(_SSRF_SVG)
+        assert result[:4] == _PNG_MAGIC, (
+            "Safe-mode rasterization of an SVG with an external <image> must "
+            "still produce a PNG (external ref ignored, not fetched)"
+        )

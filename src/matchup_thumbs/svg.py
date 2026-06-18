@@ -12,12 +12,14 @@ This module provides two public functions:
   provider (D-20).
 
 Security:
-    Every ``cairosvg.svg2png`` call is passed a ``url_fetcher`` that rejects any
-    URL that is not an inline ``data:`` URI (T-15-SVG-SSRF defence-in-depth).
-    cairosvg already uses ``defusedxml`` (disabling DTD/XXE at the parser level)
-    so this ``url_fetcher`` is a second layer: it prevents cairosvg from ever
-    making an outbound network request for an ``<image href="http…">`` or similar
-    external reference embedded in the SVG document.
+    Every ``cairosvg.svg2png`` call passes ``unsafe=False`` (cairosvg's default,
+    set explicitly here to document intent) — this is cairosvg's SSRF/XXE gate
+    (T-15-SVG-SSRF). In safe mode cairosvg does NOT resolve external XML entities
+    and does NOT fetch external resources referenced inside the SVG (e.g.
+    ``<image href="http…">`` or local ``file://`` paths), so a hostile SVG cannot
+    trigger an outbound request or local-file read during rasterization. cairosvg
+    additionally uses ``defusedxml`` at the parser level. (cairosvg 2.x ``svg2png``
+    has no ``url_fetcher`` parameter — ``unsafe=False`` is the supported control.)
 
     The output width is fixed to ``_SVG_RASTER_SIZE`` — cairosvg cannot produce
     an output larger than this regardless of the SVG's declared dimensions.  This
@@ -44,36 +46,10 @@ from PIL import Image
 # rasterize_svg_to_square_png(size=N) only when an explicit size is intentional.
 _SVG_RASTER_SIZE: int = 500
 
-
-def _blocking_url_fetcher(url: str) -> dict[str, str]:
-    """cairosvg url_fetcher that blocks all non-data: URIs (T-15-SVG-SSRF).
-
-    cairosvg calls this function whenever it needs to resolve a URL referenced
-    inside the SVG (e.g. ``<image href="http://…">`` or an external entity).
-    Raising from this function prevents any outbound fetch originating from
-    SVG document content — defence-in-depth even though MLB SVGs come from a
-    fixed, MLB-owned CDN.
-
-    Only ``data:`` URIs (inline base64 or plain data URIs) are allowed through.
-
-    Args:
-        url: The URL cairosvg wants to resolve.
-
-    Returns:
-        Never — always raises for non-data URIs.
-
-    Raises:
-        ValueError: For any non-``data:`` URL, with a message identifying the
-            blocked URL (aids debugging without leaking secrets).
-    """
-    if url.startswith("data:"):
-        # Inline data URI — safe; let cairosvg handle it natively.
-        # cairosvg's built-in fetcher decodes data URIs without network I/O.
-        # Returning {} signals cairosvg to use its own default handling for this URL.
-        return {}
-    raise ValueError(
-        f"SVG-SSRF blocked: cairosvg attempted to fetch external URL: {url!r}"
-    )
+# cairosvg SSRF/XXE gate (T-15-SVG-SSRF): safe mode blocks external entity
+# resolution and external resource (network/file) fetches during rasterization.
+# This is the supported control in cairosvg 2.x — there is no url_fetcher param.
+_SVG_UNSAFE: bool = False
 
 
 def rasterize_svg_if_needed(raw: bytes) -> bytes:
@@ -85,8 +61,8 @@ def rasterize_svg_if_needed(raw: bytes) -> bytes:
     (``\\xFF\\xD8\\xFF``), and WebP (``RIFF``) bytes unchanged (D-22 ESPN no-op).
 
     Security:
-        - Passes ``_blocking_url_fetcher`` to cairosvg so SVG-referenced external
-          URLs are never fetched (T-15-SVG-SSRF).
+        - Passes ``unsafe=False`` to cairosvg so SVG-referenced external URLs and
+          XML entities are never resolved/fetched (T-15-SVG-SSRF).
         - Output width is fixed to ``_SVG_RASTER_SIZE``; the caller cannot inflate
           it (T-15-SVG-BOMB).
 
@@ -102,7 +78,7 @@ def rasterize_svg_if_needed(raw: bytes) -> bytes:
         result: bytes = cairosvg.svg2png(
             bytestring=raw,
             output_width=_SVG_RASTER_SIZE,
-            url_fetcher=_blocking_url_fetcher,
+            unsafe=_SVG_UNSAFE,
         )
         return result
     return raw
@@ -114,7 +90,7 @@ def rasterize_svg_to_square_png(
 ) -> bytes:
     """Rasterize SVG to a square transparent-background PNG at ``size`` pixels.
 
-    Uses the same ``_blocking_url_fetcher`` SSRF mitigation as
+    Uses the same ``unsafe=False`` SSRF mitigation as
     ``rasterize_svg_if_needed``.  If cairosvg produces a non-square raster
     (common for MLB logos whose viewBox is not 1:1), the raster is centred on
     a ``size × size`` transparent canvas so downstream code always receives a
@@ -136,7 +112,7 @@ def rasterize_svg_to_square_png(
     png_bytes: bytes = cairosvg.svg2png(
         bytestring=svg_bytes,
         output_width=size,
-        url_fetcher=_blocking_url_fetcher,
+        unsafe=_SVG_UNSAFE,
     )
     img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
     if img.size == (size, size):
