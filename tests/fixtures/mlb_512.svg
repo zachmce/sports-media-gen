@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Offline MLB-style fixture for unit tests. Mirrors real MLB primary-mark SVGs:
+     CSS <style> block with .cls-N fill classes, <path> and <polygon> elements,
+     two distinct non-white colors (navy + gold), transparent background.
+     No gradients, no clipPath, no mask, no external references. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <style>
+    .cls-1 { fill: #002b5c; }
+    .cls-2 { fill: #fdb913; }
+  </style>
+  <!-- Large navy background rectangle (dominant color = navy) -->
+  <rect class="cls-1" x="56" y="56" width="400" height="400"/>
+  <!-- Smaller gold accent polygon -->
+  <polygon class="cls-2" points="200,180 312,180 312,240 256,270 200,240"/>
+  <!-- Navy inner detail path -->
+  <path class="cls-1" d="M220,290 L292,290 L292,330 L256,350 L220,330 Z"/>
+  <!-- Gold decorative band -->
+  <rect class="cls-2" x="56" y="380" width="400" height="40"/>
+</svg>
