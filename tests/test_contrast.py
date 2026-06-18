@@ -377,6 +377,59 @@ def test_decide_secondary_recommends_dark_variant() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 15 Wave 0: MiLB contrast scaffolds (MILB-05)
+# ---------------------------------------------------------------------------
+
+
+def test_contrast_both_colors_none_milb() -> None:
+    """MILB-05: decide_contrast null-color path when both team colors are None.
+
+    MiLB teams from the MLB Stats API have no color data (D-14 confirmed
+    via live probe).  When both primary_color and secondary_color are None,
+    the contrast engine must hit the null-color path — returning a decision
+    with recommended_variant=None and a grey background_rgb (NULL_PRIMARY).
+
+    This test drives the null-color path through the existing contrast.py
+    without any MiLB-specific code changes (D-18: ESPN code untouched).
+    The existing null-color guard in the render layer (plan 10-03) handles
+    the None→grey mapping before calling decide_contrast.
+
+    What we test here: decide_contrast called with both primaries being the
+    grey fallback (as the render layer would do) → recommended_variant is None
+    and background_rgb is the grey fallback value.
+    """
+    from matchup_thumbs.generators._color import NULL_PRIMARY as _NULL_PRIMARY
+
+    # The render layer maps None colors to NULL_PRIMARY before calling decide_contrast.
+    # Simulate that: both primary_rgb = secondary_rgb = NULL_PRIMARY.
+    # repr_rgb: the dominant logo color (for a placeholder logo this is also grey-ish).
+    grey: tuple[int, int, int] = _NULL_PRIMARY
+    repr_rgb: tuple[int, int, int] = (200, 200, 200)  # near-white repr (placeholder logo)
+
+    result = decide_contrast(
+        primary_rgb=grey,
+        secondary_rgb=grey,
+        repr_rgb=repr_rgb,
+        logo_variants=None,   # MiLB teams have no 'default'/'dark' logo variants
+    )
+
+    # No 'primary_logo_on_primary_color' or 'dark' variants → recommended_variant=None
+    assert result.recommended_variant is None, (
+        f"Expected recommended_variant=None for colorless MiLB team "
+        f"(no logo_variants), got {result.recommended_variant!r}"
+    )
+
+    # The grey background decision is valid — treatment may be NONE or OUTLINE
+    # depending on the repr contrast, but must not crash and must produce a usable bg.
+    assert result.background_rgb is not None, (
+        "decide_contrast must return a background_rgb even when both colors are grey"
+    )
+    assert len(result.background_rgb) == 3, (
+        f"background_rgb must be a 3-tuple, got {result.background_rgb!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # D-05: settings.min_contrast_ratio default (engine purity check)
 # ---------------------------------------------------------------------------
 

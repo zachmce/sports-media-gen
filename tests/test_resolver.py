@@ -327,3 +327,119 @@ async def test_resolver_negative_cache_short_circuits(
     assert result is None
     # Pool.connection must NOT have been called (trigram scan short-circuited)
     mock_pool.connection.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 Wave 0: MiLB resolver scaffolds (pg_required — skip without Postgres)
+# ---------------------------------------------------------------------------
+
+
+@pg_required
+async def test_milb_resolver_cross_level_isolation(
+    seeded_registry: None,
+    live_pool: AsyncConnectionPool,
+) -> None:
+    """MILB-03 / D-09: Cross-level abbreviation collision handled by league_id scoping.
+
+    Seeds a 'COL' alias under milb-aaa (Columbus Clippers) and verifies that
+    the same alias does NOT resolve under milb-aa (D-09 — resolver is already
+    league-scoped; no new mechanism needed).
+
+    This test requires:
+    1. Migration 0005 applied (milb-aaa and milb-aa league rows exist).
+    2. A milb-aaa team seeded with alias 'col'.
+
+    Until both conditions are met (Wave 2 seed + migration 0005), this test
+    will skip via pg_required when Postgres is absent, or will fail gracefully
+    when the milb-aaa league row doesn't exist yet (Wave 0 is test scaffolding).
+    """
+    import psycopg
+
+    raw_dsn = _POSTGRES_DSN.replace("postgresql+psycopg://", "postgresql://")
+
+    # Check milb-aaa and milb-aa league rows exist (only after migration 0005)
+    with psycopg.connect(raw_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT slug, id FROM leagues WHERE slug IN ('milb-aaa', 'milb-aa')"
+            )
+            league_rows = {row[0]: row[1] for row in cur.fetchall()}
+
+    if "milb-aaa" not in league_rows or "milb-aa" not in league_rows:
+        pytest.skip(
+            "milb-aaa and milb-aa league rows not yet seeded (migration 0005 "
+            "not applied). Will run after Wave 1 migration lands."
+        )
+
+    aaa_id = league_rows["milb-aaa"]
+    aa_id = league_rows["milb-aa"]
+
+    with psycopg.connect(raw_dsn) as conn:
+        with conn.cursor() as cur:
+            # Seed minimal Columbus Clippers row under milb-aaa
+            cur.execute(
+                """
+                INSERT INTO teams
+                    (league_id, slug, display_name, abbreviation)
+                VALUES (%s, 'columbus-clippers', 'Columbus Clippers', 'COL')
+                ON CONFLICT (league_id, slug) DO NOTHING
+                RETURNING id
+                """,
+                (aaa_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                # Already exists — fetch the id
+                cur.execute(
+                    "SELECT id FROM teams WHERE league_id = %s AND slug = 'columbus-clippers'",
+                    (aaa_id,),
+                )
+                fetched = cur.fetchone()
+                assert fetched is not None
+                clippers_aaa_id = fetched[0]
+            else:
+                clippers_aaa_id = row[0]
+
+            # Upsert 'col' alias for milb-aaa Columbus Clippers
+            cur.execute(
+                """
+                INSERT INTO team_aliases (team_id, league_id, alias)
+                VALUES (%s, %s, 'col')
+                ON CONFLICT (league_id, alias) DO NOTHING
+                """,
+                (clippers_aaa_id, aaa_id),
+            )
+        conn.commit()
+
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)
+    redis.set = AsyncMock()
+    redis.delete = AsyncMock()
+
+    # 'col' resolves under milb-aaa (Columbus Clippers is there)
+    aaa_result = await resolve("milb-aaa", "col", live_pool, redis)
+    assert aaa_result is not None, (
+        "Expected 'col' to resolve under milb-aaa (Columbus Clippers)"
+    )
+    assert aaa_result["slug"] == "columbus-clippers"
+
+    # 'col' does NOT resolve under milb-aa (no team seeded there with that alias)
+    redis.get = AsyncMock(return_value=None)  # reset cache mock
+    aa_result = await resolve("milb-aa", "col", live_pool, redis)
+    assert aa_result is None, (
+        f"Expected 'col' to NOT resolve under milb-aa (cross-level isolation). "
+        f"Got: {aa_result!r}"
+    )
+
+    # Cleanup
+    with psycopg.connect(raw_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM team_aliases WHERE team_id = %s AND league_id = %s",
+                (clippers_aaa_id, aaa_id),
+            )
+            cur.execute(
+                "DELETE FROM teams WHERE id = %s",
+                (clippers_aaa_id,),
+            )
+        conn.commit()

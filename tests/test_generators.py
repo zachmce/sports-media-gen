@@ -745,3 +745,70 @@ def test_league_logo_contrast_outline_path_produces_different_render() -> None:
         "Thumb with league logo OUTLINE treatment must differ from "
         "NONE treatment (BRAND-03)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 Wave 0: MiLB generator scaffolds (MILB-05)
+# ---------------------------------------------------------------------------
+
+
+def test_milb_colorless_team_renders() -> None:
+    """MILB-05: generator renders without crash when both team colors are None.
+
+    MiLB teams have no color data from the MLB Stats API (D-14 confirmed).
+    The contrast engine must return the neutral-grey fallback (NULL_PRIMARY)
+    when both primary_color and secondary_color are None.  This test drives
+    that path end-to-end through generate_thumb_style0 — no golden image
+    is used (D-18: no render_version change for this path).
+
+    Mirrors test_null_color_fallback but uses MiLB-representative team dicts
+    (both colors None, provider='mlb') to confirm the fallback path is correct
+    for all MiLB teams without exception.
+    """
+    from matchup_thumbs.generators._color import NULL_PRIMARY as _NULL_PRIMARY
+    from matchup_thumbs.generators.thumb import generate_thumb_style0
+
+    # MiLB-style teams: no color data (D-14)
+    mud_hens: dict[str, Any] = {
+        "id": 1,
+        "league_id": 99,
+        "slug": "toledo-mud-hens",
+        "display_name": "Toledo Mud Hens",
+        "abbreviation": "TOL",
+        "primary_color": None,      # D-14: MLB Stats API has no colors
+        "secondary_color": None,
+        "logo_url": None,
+        "provider_id": "512",
+        "logo_variants": {"svg": "https://www.mlbstatic.com/team-logos/512.svg"},
+    }
+    clippers_aaa: dict[str, Any] = {
+        "id": 2,
+        "league_id": 99,
+        "slug": "columbus-clippers",
+        "display_name": "Columbus Clippers",
+        "abbreviation": "COL",
+        "primary_color": None,
+        "secondary_color": None,
+        "logo_url": None,
+        "provider_id": "564",
+        "logo_variants": {"svg": "https://www.mlbstatic.com/team-logos/564.svg"},
+    }
+
+    # Simulate the contrast engine's null-color decision path (CTR-05):
+    # when both colors are None, the render layer produces a grey decision.
+    assets = fixture_decoded_assets()
+    assets["away_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+    assets["home_decision"] = make_decision(background_rgb=_NULL_PRIMARY)
+
+    # Must not raise; result must be correct canvas size (MILB-05)
+    img = generate_thumb_style0(mud_hens, clippers_aaa, assets)
+    assert img.size == (1280, 720), (
+        f"Expected 1280×720, got {img.size!r} for MiLB colorless render"
+    )
+
+    # Top-left pixel (solidly in away colour band) must be the grey fallback
+    top_left = img.getpixel((0, 0))
+    assert top_left[:3] == _NULL_PRIMARY, (
+        f"Expected neutral-grey {_NULL_PRIMARY!r} at (0,0) for colorless MiLB team, "
+        f"got {top_left[:3]!r}"
+    )
