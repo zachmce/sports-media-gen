@@ -182,23 +182,60 @@ class MLBStatsProvider:
             client, settings.mlb_statsapi_base_url, sport_id
         )
 
-        # Semaphore mirrors seed.run()'s espn_semaphore_size (D-08 pattern).
+        # Semaphore mirrors seed.run()'s espn_semaphore_size (D-08 pattern).  It
+        # is only meaningful if the palette extractions actually run
+        # concurrently (WR-06) — a sequential `for ... await` loop never
+        # contends it.  Below we gather the per-team extractions so the limiter
+        # genuinely bounds in-flight SVG fetches.
         semaphore = asyncio.Semaphore(settings.espn_semaphore_size)
 
         active_entries = [e for e in response.teams if e.active]
 
-        teams: list[ProviderTeam] = []
+        # Derive slugs in order FIRST (WR-02 intra-batch collision guard).
+        # The team upsert is ON CONFLICT (league_id, slug) DO UPDATE, so two
+        # teams deriving the same slug would silently overwrite each other in
+        # `teams`.  We do not disambiguate here (no slug-derivation change —
+        # that is Phase 16); logging is the runtime guard so the otherwise
+        # invisible collision is at least visible in the seed logs.
+        slugs: list[str] = []
+        seen_slugs: dict[str, str] = {}
         for entry in active_entries:
+            slug = _derive_mlb_slug(entry.locationName, entry.teamName)
+            if slug in seen_slugs:
+                await logger.awarning(
+                    "milb_slug_collision",
+                    slug=slug,
+                    league=league_slug,
+                    existing=seen_slugs[slug],
+                    colliding=str(entry.id),
+                )
+            seen_slugs[slug] = str(entry.id)
+            slugs.append(slug)
+
+        # Rasterize-once, CONCURRENTLY (WR-06): dispatch every team's palette
+        # extraction at once and let the shared semaphore (above) bound how many
+        # SVG fetches are in flight.  asyncio.gather preserves input order, so
+        # `colors[i]` lines up with `active_entries[i]`.  Each task degrades to
+        # (None, None) internally on any error (MILB-05) — never aborts the
+        # league — so gather never raises here.
+        colors = await asyncio.gather(
+            *(
+                _extract_team_colors(
+                    client,
+                    f"{settings.mlb_logos_base_url}/{entry.id}.svg",
+                    semaphore,
+                    slug,
+                )
+                for entry, slug in zip(active_entries, slugs, strict=True)
+            )
+        )
+
+        teams: list[ProviderTeam] = []
+        for entry, slug, (primary_color, secondary_color) in zip(
+            active_entries, slugs, colors, strict=True
+        ):
             svg_url = f"{settings.mlb_logos_base_url}/{entry.id}.svg"
             spot_url = f"{settings.mlb_spots_base_url}/v1/team/{entry.id}/spots/500"
-            slug = _derive_mlb_slug(entry.locationName, entry.teamName)
-
-            # Rasterize-once: fetch SVG bytes → rasterize off event loop →
-            # extract palette.  Colors are bare hex (no '#'); seed.py
-            # normalises to '#hex'.  On any failure → (None, None) / MILB-05.
-            primary_color, secondary_color = await _extract_team_colors(
-                client, svg_url, semaphore, slug
-            )
 
             teams.append(
                 ProviderTeam(
