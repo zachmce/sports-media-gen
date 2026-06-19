@@ -1,10 +1,25 @@
-"""League and team listing routes."""
+"""League, sport, and team listing routes."""
 
 from fastapi import APIRouter, HTTPException, Request
 from psycopg import rows as pg_rows
 from pydantic import BaseModel
 
 router = APIRouter()
+
+
+class LeagueInSport(BaseModel):
+    """Nested league entry within a SportResponse (SPORT-03, D-01)."""
+
+    slug: str
+    display_name: str
+
+
+class SportResponse(BaseModel):
+    """Response model for a single sport with its member leagues (SPORT-03, D-01)."""
+
+    slug: str
+    display_name: str
+    leagues: list[LeagueInSport]
 
 
 class LeagueResponse(BaseModel):
@@ -24,20 +39,77 @@ class TeamResponse(BaseModel):
     aliases: list[str]
 
 
-@router.get("/leagues", response_model=list[LeagueResponse])
-async def list_leagues(request: Request) -> list[LeagueResponse]:
-    """Return all supported leagues ordered by slug.
+@router.get("/sports", response_model=list[SportResponse])
+async def list_sports(request: Request) -> list[SportResponse]:
+    """Return all canonical sports, each with a nested list of its leagues.
 
-    Reads from the ``leagues`` table via the shared psycopg3 pool on
-    ``request.app.state.db_pool``.  No authentication required — this is a
-    public read-only registry listing (API-04).
+    Sports are ordered by sport slug; leagues within each sport are ordered by
+    league slug.  A sport with zero leagues (LEFT JOIN all-NULL row) returns
+    ``leagues: []``.  Uses the shared psycopg3 pool — no ORM (criterion 3,
+    D-06).  Public read-only registry endpoint (SPORT-03).
     """
     pool = request.app.state.db_pool
     async with pool.connection() as conn:
         conn.row_factory = pg_rows.dict_row
         async with conn.cursor() as cur:
             await cur.execute(
-                "SELECT slug, display_name, sport FROM leagues ORDER BY slug"
+                """
+                SELECT sports.slug        AS sport_slug,
+                       sports.display_name AS sport_display_name,
+                       leagues.slug        AS league_slug,
+                       leagues.display_name AS league_display_name
+                FROM sports
+                LEFT JOIN leagues ON leagues.sport_id = sports.id
+                ORDER BY sports.slug, leagues.slug
+                """
+            )
+            rows = await cur.fetchall()
+
+    # Group flat (sport, league) rows into the nested SportResponse shape.
+    # dict preserves insertion order (Python 3.7+), giving us sports in the
+    # same order the DB returned them (ORDER BY sports.slug).
+    sports_map: dict[str, SportResponse] = {}
+    for row in rows:
+        sport_slug: str = row["sport_slug"]
+        if sport_slug not in sports_map:
+            sports_map[sport_slug] = SportResponse(
+                slug=sport_slug,
+                display_name=row["sport_display_name"],
+                leagues=[],
+            )
+        # LEFT JOIN: when a sport has zero leagues every league column is NULL.
+        # Gate the append to avoid a ValidationError on a null slug (D-05,
+        # RESEARCH Pitfall 2).
+        if row["league_slug"] is not None:
+            sports_map[sport_slug].leagues.append(
+                LeagueInSport(
+                    slug=row["league_slug"],
+                    display_name=row["league_display_name"],
+                )
+            )
+    return list(sports_map.values())
+
+
+@router.get("/leagues", response_model=list[LeagueResponse])
+async def list_leagues(request: Request) -> list[LeagueResponse]:
+    """Return all supported leagues ordered by slug.
+
+    The ``sport`` field is sourced from the ``leagues.sport_id → sports.slug``
+    FK join (SPORT-04, D-07) rather than the legacy flat ``leagues.sport`` text
+    column.  The ``LeagueResponse`` shape (slug, display_name, sport) is
+    unchanged.  No authentication required — public read-only registry (API-04).
+    """
+    pool = request.app.state.db_pool
+    async with pool.connection() as conn:
+        conn.row_factory = pg_rows.dict_row
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT l.slug, l.display_name, s.slug AS sport
+                FROM leagues l
+                JOIN sports s ON s.id = l.sport_id
+                ORDER BY l.slug
+                """
             )
             rows = await cur.fetchall()
     return [LeagueResponse(**r) for r in rows]
