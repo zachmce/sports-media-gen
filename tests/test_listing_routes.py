@@ -1,7 +1,8 @@
-"""Listing route tests — GET /leagues and GET /{league}/teams (API-03, API-04).
+"""Listing route tests — GET /sports, GET /leagues and GET /{league}/teams.
 
 Tests use TestClient with a patched stub lifespan that injects a mock pool
-returning seeded fixture rows — no live Postgres required.
+returning seeded fixture rows — no live Postgres required.  Covers API-03,
+API-04, SPORT-03, SPORT-04.
 """
 
 from __future__ import annotations
@@ -42,6 +43,67 @@ _NBA_TEAM_ROWS: list[dict[str, Any]] = [
         "display_name": "Los Angeles Lakers",
         "abbreviation": "LAL",
         "aliases": ["lal", "lakers", "losangeles", "losangeleslakers"],
+    },
+]
+
+# Simulates LEFT JOIN output from the GET /sports query — one row per
+# (sport, league) pair, with aliased column names matching the SQL aliases
+# (sport_slug, sport_display_name, league_slug, league_display_name).
+# Covers 4 sports; baseball has two leagues (milb-aaa, mlb) slug-ordered and
+# hockey has one (nhl) — exercises multi-league grouping and ordering (D-04).
+_SPORTS_JOIN_ROWS: list[dict[str, Any]] = [
+    {
+        "sport_slug": "baseball",
+        "sport_display_name": "Baseball",
+        "league_slug": "milb-aaa",
+        "league_display_name": "Triple-A",
+    },
+    {
+        "sport_slug": "baseball",
+        "sport_display_name": "Baseball",
+        "league_slug": "mlb",
+        "league_display_name": "MLB",
+    },
+    {
+        "sport_slug": "basketball",
+        "sport_display_name": "Basketball",
+        "league_slug": "nba",
+        "league_display_name": "NBA",
+    },
+    {
+        "sport_slug": "basketball",
+        "sport_display_name": "Basketball",
+        "league_slug": "ncaab",
+        "league_display_name": "NCAA Basketball",
+    },
+    {
+        "sport_slug": "football",
+        "sport_display_name": "Football",
+        "league_slug": "ncaaf",
+        "league_display_name": "NCAA Football",
+    },
+    {
+        "sport_slug": "football",
+        "sport_display_name": "Football",
+        "league_slug": "nfl",
+        "league_display_name": "NFL",
+    },
+    {
+        "sport_slug": "hockey",
+        "sport_display_name": "Hockey",
+        "league_slug": "nhl",
+        "league_display_name": "NHL",
+    },
+]
+
+# Simulates the all-NULL LEFT JOIN row for a sport with zero leagues (D-05).
+# Used to exercise the null-league coalesce to leagues: [] in list_sports.
+_SPORTS_EMPTY_ROWS: list[dict[str, Any]] = [
+    {
+        "sport_slug": "esports",
+        "sport_display_name": "Esports",
+        "league_slug": None,
+        "league_display_name": None,
     },
 ]
 
@@ -174,6 +236,49 @@ def unknown_league_client() -> Generator[TestClient]:
         app.router.lifespan_context = original
 
 
+@pytest.fixture
+def sports_client() -> Generator[TestClient]:
+    """TestClient configured to return _SPORTS_JOIN_ROWS from GET /sports.
+
+    The mock pool cursor returns _SPORTS_JOIN_ROWS from fetchall(), simulating
+    the LEFT JOIN output (one row per sport+league pair) — four sports, baseball
+    with two leagues, hockey with one.
+    """
+    cur = _make_cursor(fetchone_result=None, fetchall_result=_SPORTS_JOIN_ROWS)
+    conn = _make_conn(cur)
+    pool = MagicMock()
+    pool.connection.return_value = conn
+
+    original = app.router.lifespan_context
+    app.router.lifespan_context = _stub_lifespan_with_pool(pool)
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.router.lifespan_context = original
+
+
+@pytest.fixture
+def sports_empty_client() -> Generator[TestClient]:
+    """TestClient configured to return _SPORTS_EMPTY_ROWS from GET /sports.
+
+    Simulates a sport with zero leagues (all-NULL LEFT JOIN row) to exercise
+    the null-league coalesce to leagues: [] (D-05, RESEARCH Pitfall 2).
+    """
+    cur = _make_cursor(fetchone_result=None, fetchall_result=_SPORTS_EMPTY_ROWS)
+    conn = _make_conn(cur)
+    pool = MagicMock()
+    pool.connection.return_value = conn
+
+    original = app.router.lifespan_context
+    app.router.lifespan_context = _stub_lifespan_with_pool(pool)
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.router.lifespan_context = original
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -184,7 +289,9 @@ def test_listing_leagues(leagues_client: TestClient) -> None:
 
     Each item must have slug, display_name, and sport fields.
     The six expected league slugs (nba, nfl, mlb, nhl, ncaaf, ncaab) must
-    all appear in the response.
+    all appear in the response.  Also confirms that the mlb entry carries
+    sport='baseball' — proving the handler's dict-key mapping works with
+    the FK-join-sourced sport value (SPORT-04, D-07).
     """
     resp = leagues_client.get("/leagues")
     assert resp.status_code == 200
@@ -200,6 +307,11 @@ def test_listing_leagues(leagues_client: TestClient) -> None:
 
     slugs = {item["slug"] for item in data}
     assert {"nba", "nfl", "mlb", "nhl", "ncaaf", "ncaab"} <= slugs
+
+    # Confirm the FK-sourced sport value for a specific league (SPORT-04)
+    mlb_items = [item for item in data if item["slug"] == "mlb"]
+    assert len(mlb_items) == 1
+    assert mlb_items[0]["sport"] == "baseball"
 
 
 def test_listing_teams(teams_client: TestClient) -> None:
@@ -237,3 +349,72 @@ def test_listing_unknown_league_404(unknown_league_client: TestClient) -> None:
     detail = body.get("detail", body)
     assert "league" in detail
     assert detail["league"] == "zzz"
+
+
+def test_listing_sports(sports_client: TestClient) -> None:
+    """SPORT-03: GET /sports returns a list of sport objects.
+
+    Each sport has slug, display_name, and a leagues list.  Nested league
+    objects have only slug and display_name — no sport field (D-01).
+    Baseball has two leagues; hockey has one.
+    """
+    resp = sports_client.get("/sports")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 4
+
+    for sport in data:
+        assert "slug" in sport
+        assert "display_name" in sport
+        assert "leagues" in sport
+        assert isinstance(sport["leagues"], list)
+        for league in sport["leagues"]:
+            assert "slug" in league
+            assert "display_name" in league
+            # Nested league objects must NOT carry a redundant sport field (D-01)
+            assert "sport" not in league
+
+    # baseball has two nested leagues; hockey has one
+    baseball = next(s for s in data if s["slug"] == "baseball")
+    assert len(baseball["leagues"]) == 2
+
+    hockey = next(s for s in data if s["slug"] == "hockey")
+    assert len(hockey["leagues"]) == 1
+
+
+def test_listing_sports_ordering(sports_client: TestClient) -> None:
+    """SPORT-03 / D-04: GET /sports returns sports and leagues ordered by slug."""
+    resp = sports_client.get("/sports")
+    assert resp.status_code == 200
+
+    data = resp.json()
+
+    # Top-level sports are slug-ordered
+    sport_slugs = [s["slug"] for s in data]
+    assert sport_slugs == ["baseball", "basketball", "football", "hockey"]
+
+    # Baseball's nested leagues are slug-ordered (milb-aaa < mlb)
+    baseball = next(s for s in data if s["slug"] == "baseball")
+    league_slugs = [lg["slug"] for lg in baseball["leagues"]]
+    assert league_slugs == ["milb-aaa", "mlb"]
+
+
+def test_listing_sports_empty_leagues(sports_empty_client: TestClient) -> None:
+    """SPORT-03 / D-05: A sport with zero leagues returns leagues: [].
+
+    The all-NULL LEFT JOIN row (league_slug=None) must be coalesced to an
+    empty list, not appended as a null entry (RESEARCH Pitfall 2).
+    """
+    resp = sports_empty_client.get("/sports")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 1
+
+    sport = data[0]
+    assert sport["slug"] == "esports"
+    assert sport["display_name"] == "Esports"
+    assert sport["leagues"] == []
