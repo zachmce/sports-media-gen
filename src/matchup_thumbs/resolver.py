@@ -35,7 +35,7 @@ Security
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import structlog
 from psycopg import rows as pg_rows
@@ -61,6 +61,21 @@ _TEAM_COLUMNS = (
 
 # Maximum raw input length accepted before treating as a miss (T-02-09).
 _MAX_INPUT_LEN = 100
+
+
+class LeagueResolution(NamedTuple):
+    """Typed result returned by ``resolve_league``.
+
+    Fields
+    ------
+    slug:
+        Canonical league slug (always a member of ``KNOWN_LEAGUES``).
+    sport:
+        Sport slug from the ``sports`` table FK join (e.g. ``"baseball"``).
+    """
+
+    slug: str
+    sport: str
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +165,203 @@ async def _fetch_team_by_id(
         await cur.execute(sql, (team_id,))
         row = await cur.fetchone()
         return dict(row) if row is not None else None
+
+
+# ---------------------------------------------------------------------------
+# League resolver helpers (Phase 18 — LALIAS-02)
+# ---------------------------------------------------------------------------
+
+
+async def _query_league_exact(
+    pool: AsyncConnectionPool[Any],
+    norm: str,
+) -> tuple[str, str] | None:
+    """Stage 1 / Stage 2: exact match on normalized input, globally scoped.
+
+    Matches the normalized input against ``league_aliases.alias`` (the alias
+    table) OR ``leagues.slug`` (direct canonical slug match).  The ``sports``
+    table is joined via ``leagues.sport_id`` — the canonical FK introduced in
+    Phase 17 — so both slug and sport are returned in a single query.
+
+    Parameterised only — never string-formatted (T-02-08, T-18-INJ).
+    """
+    sql = """
+        SELECT l.slug, s.slug AS sport
+        FROM leagues l
+        JOIN sports s ON s.id = l.sport_id
+        WHERE l.id IN (
+            SELECT la.league_id FROM league_aliases la WHERE la.alias = %s
+        ) OR l.slug = %s
+        LIMIT 1
+    """
+    async with (
+        pool.connection() as conn,
+        conn.cursor(row_factory=pg_rows.dict_row) as cur,
+    ):
+        await cur.execute(sql, (norm, norm))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return (row["slug"], row["sport"])
+
+
+async def _query_league_trigram(
+    pool: AsyncConnectionPool[Any],
+    norm: str,
+) -> tuple[str, str] | None:
+    """Stage 3: pg_trgm fuzzy match over ``league_aliases.alias`` (GIN-indexed).
+
+    Queries ``league_aliases.alias`` ONLY — not ``leagues.slug`` — because only
+    the alias column carries the GIN trigram index (``ix_league_aliases_alias_trgm``
+    from migration 0007).  Stage 1 already handles direct slug matches; Stage 3
+    must not scan unindexed columns.
+
+    The transient ``sim`` score is used for ordering only and is dropped from the
+    returned tuple (mirrors ``_query_trigram``).
+
+    Parameterised only — never string-formatted (T-02-08, T-18-INJ).
+    """
+    sql = """
+        SELECT l.slug, s.slug AS sport,
+               similarity(la.alias, %s) AS sim
+        FROM league_aliases la
+        JOIN leagues l ON l.id = la.league_id
+        JOIN sports s ON s.id = l.sport_id
+        WHERE similarity(la.alias, %s) > %s
+        ORDER BY sim DESC
+        LIMIT 1
+    """
+    async with (
+        pool.connection() as conn,
+        conn.cursor(row_factory=pg_rows.dict_row) as cur,
+    ):
+        await cur.execute(
+            sql,
+            (norm, norm, settings.resolve_similarity_threshold),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        # Drop the transient similarity score — not part of the return contract.
+        return (row["slug"], row["sport"])
+
+
+# ---------------------------------------------------------------------------
+# Public league resolver entry-point (Phase 18 — LALIAS-02)
+# ---------------------------------------------------------------------------
+
+
+async def resolve_league(
+    raw_input: str,
+    pool: AsyncConnectionPool[Any],
+    redis: Redis,  # bare Redis (redis-py 8.0 is not a generic class at runtime)
+) -> LeagueResolution | None:
+    """Resolve raw user input to a canonical league slug + sport, globally scoped.
+
+    Return contract:
+        None — total miss (all stages exhausted + negative cache set),
+               overlong input, or resolved slug not in ``KNOWN_LEAGUES``.
+        LeagueResolution — ``(slug, sport)`` where ``slug`` is a member of
+               ``KNOWN_LEAGUES`` and ``sport`` is from ``sports.slug`` via the
+               ``leagues.sport_id`` FK join.
+
+    Unlike ``resolve()`` (which is league-scoped for teams), this function has
+    no outer league scope — league aliases are globally unique (Phase 17 D-07
+    ``UNIQUE(alias)``), so no scope parameter is needed.
+
+    Redis keys are also global:
+      - positive: ``leagueresolve:{norm}`` (value: ``b"slug:sport"``)
+      - negative: ``leagueresolve_miss:{norm}`` (value: ``b"miss"``)
+
+    Security
+    --------
+    - T-18-INJ: All SQL in helpers uses ``%s`` positional parameters.
+    - T-18-DOS: Input longer than ``_MAX_INPUT_LEN`` is rejected before
+      normalization (same as ``resolve()``'s T-02-09 guard).
+    - T-18-SSRF: Resolved canonical slug is checked against ``KNOWN_LEAGUES``
+      before being returned or cached positively.
+
+    Args:
+        raw_input: Raw user-supplied string (e.g. ``"triple-a"`` or ``"mlb"``).
+        pool:      Async psycopg3 connection pool.
+        redis:     Async Redis client (``decode_responses=False``).
+
+    Returns:
+        ``LeagueResolution(slug, sport)`` or None.
+    """
+    # T-18-DOS / T-02-09 parity: reject overlong input before normalization.
+    if len(raw_input) > _MAX_INPUT_LEN:
+        await logger.awarning(
+            "resolve_league_input_too_long",
+            length=len(raw_input),
+        )
+        return None
+
+    norm = normalize_input(raw_input)
+    cache_key = f"leagueresolve:{norm}".encode()
+    miss_key = f"leagueresolve_miss:{norm}".encode()
+
+    # ------------------------------------------------------------------
+    # Positive cache check — decode "slug:sport" pair.
+    # decode_responses=False guarantees bytes at runtime; cast for mypy.
+    # ------------------------------------------------------------------
+    cached = await redis.get(cache_key)
+    if cached is not None:
+        cached_bytes: bytes = cached if isinstance(cached, bytes) else cached.encode()
+        parts = cached_bytes.decode().split(":", 1)
+        if len(parts) == 2 and parts[0] in KNOWN_LEAGUES:
+            return LeagueResolution(slug=parts[0], sport=parts[1])
+        # Stale or malformed positive cache entry — delete and fall through.
+        await redis.delete(cache_key)
+
+    # ------------------------------------------------------------------
+    # Negative cache check — short-circuit repeat trigram scans (T-18-DOS).
+    # ------------------------------------------------------------------
+    neg_cached = await redis.get(miss_key)
+    if neg_cached is not None:
+        return None
+
+    # ------------------------------------------------------------------
+    # Stage 1: exact match on normalized input (alias OR canonical slug).
+    # ------------------------------------------------------------------
+    result = await _query_league_exact(pool, norm)
+
+    # ------------------------------------------------------------------
+    # Stage 3: trigram fuzzy match over league_aliases.alias (GIN index).
+    # (Stage 2 collapses into Stage 1: normalize_input produces the same
+    # form as stored aliases, so a separate normalized-exact pass is
+    # redundant — identical to the team resolver's collapse rationale.)
+    # ------------------------------------------------------------------
+    if result is None:
+        result = await _query_league_trigram(pool, norm)
+
+    # ------------------------------------------------------------------
+    # Cache the outcome.
+    # ------------------------------------------------------------------
+    if result is not None:
+        slug, sport = result
+        # T-18-SSRF belt-and-suspenders: the resolved slug must be in
+        # KNOWN_LEAGUES before being used downstream (mirrors lines 192-194).
+        if slug not in KNOWN_LEAGUES:
+            await logger.awarning("resolve_league_unknown_slug", slug=slug)
+            await redis.set(miss_key, b"miss", ex=settings.resolve_negative_ttl)
+            return None
+        lr = LeagueResolution(slug=slug, sport=sport)
+        await redis.set(
+            cache_key,
+            f"{slug}:{sport}".encode(),
+            ex=settings.resolve_positive_ttl,
+        )
+        return lr
+
+    # Total miss — set negative cache to blunt repeat trigram scans.
+    await logger.awarning(
+        "resolve_league_miss",
+        raw_input=raw_input,
+        norm=norm,
+    )
+    await redis.set(miss_key, b"miss", ex=settings.resolve_negative_ttl)
+    return None
 
 
 # ---------------------------------------------------------------------------
