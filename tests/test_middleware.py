@@ -166,8 +166,7 @@ def test_contextvars_no_bleed_after_image_request(client: TestClient) -> None:
     image_completed = [
         e
         for e in cap
-        if e.get("event") == "request_completed"
-        and e.get("path") == image_path
+        if e.get("event") == "request_completed" and e.get("path") == image_path
     ]
     probe_completed = [
         e
@@ -251,8 +250,7 @@ def test_404_path_no_stale_cache_tier(client: TestClient) -> None:
     not_found_completed = [
         e
         for e in cap
-        if e.get("event") == "request_completed"
-        and e.get("path") == not_found_path
+        if e.get("event") == "request_completed" and e.get("path") == not_found_path
     ]
     assert len(not_found_completed) == 1, "Expected 1 request_completed for 404"
 

@@ -1650,23 +1650,15 @@ async def test_league_alias_seed_idempotent(
         f"{_settings.mlb_statsapi_base_url}/api/v1/teams?sportId=11&activeStatus=Y"
     )
     # MiLB league shield URLs
-    shield_light_url = (
-        f"{_settings.mlb_logos_base_url}/league-on-light/milb.svg"
-    )
-    shield_dark_url = (
-        f"{_settings.mlb_logos_base_url}/league-on-dark/milb.svg"
-    )
+    shield_light_url = f"{_settings.mlb_logos_base_url}/league-on-light/milb.svg"
+    shield_dark_url = f"{_settings.mlb_logos_base_url}/league-on-dark/milb.svg"
 
     # Load the recorded mlb-aaa fixture
-    fixture_path = (
-        _Path(__file__).parent / "fixtures" / "mlb_aaa_response.json"
-    )
+    fixture_path = _Path(__file__).parent / "fixtures" / "mlb_aaa_response.json"
     mlb_aaa_fixture: dict[str, Any] = _json.loads(fixture_path.read_text())
 
     # Load SVG mark fixture for per-team logo fetches
-    svg_bytes = (
-        _Path(__file__).parent / "fixtures" / "mlb_512.svg"
-    ).read_bytes()
+    svg_bytes = (_Path(__file__).parent / "fixtures" / "mlb_512.svg").read_bytes()
 
     # A tiny 1×1 SVG (not cairosvg-rasterized) for the league shield —
     # seed degrades gracefully when rasterization fails (no cairosvg required).
@@ -1682,9 +1674,7 @@ async def test_league_alias_seed_idempotent(
             )
         if url in (shield_light_url, shield_dark_url):
             return httpx.Response(200, content=tiny_svg)
-        if _re.match(
-            r"https://www\.mlbstatic\.com/team-logos/\d+\.svg", url
-        ):
+        if _re.match(r"https://www\.mlbstatic\.com/team-logos/\d+\.svg", url):
             return httpx.Response(200, content=svg_bytes)
         return httpx.Response(404)
 
@@ -1725,12 +1715,8 @@ async def test_league_alias_seed_idempotent(
 
                 # Second seed run (idempotent)
                 transport2 = httpx.MockTransport(handler=_milb_mock_handler)
-                async with httpx.AsyncClient(
-                    transport=transport2
-                ) as http_client2:
-                    await seed_run(
-                        pool, redis_client, http_client2, [league_slug]
-                    )
+                async with httpx.AsyncClient(transport=transport2) as http_client2:
+                    await seed_run(pool, redis_client, http_client2, [league_slug])
 
                 # Check count after second run — must be IDENTICAL (no duplicates)
                 with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
