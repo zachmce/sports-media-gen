@@ -131,11 +131,19 @@ def test_contextvars_no_bleed_after_image_request(client: TestClient) -> None:
        key — confirming clear_contextvars() at middleware entry erased the prior
        request's context before the new one started.
     """
+    from matchup_thumbs.resolver import LeagueResolution
+
     hit_result = RenderResult(png=_make_png_bytes(), tier="hit")
     away = _team("lakers")
     home = _team("celtics")
+    lr = LeagueResolution(slug="nba", sport="basketball")
 
+    image_path = "/basketball/nba/lakers/celtics/thumb"
     with (
+        patch(
+            "matchup_thumbs.routes.images.resolve_league",
+            new=AsyncMock(return_value=lr),
+        ),
         patch(
             "matchup_thumbs.routes.images.resolve",
             new=AsyncMock(side_effect=[away, home]),
@@ -147,7 +155,7 @@ def test_contextvars_no_bleed_after_image_request(client: TestClient) -> None:
         _cap() as cap,
     ):
         # Step 1: successful image request — binds league/kind/cache_tier
-        image_resp = client.get("/nba/lakers/celtics/thumb")
+        image_resp = client.get(image_path)
         # Step 2: probe request — must NOT inherit the image request's context
         probe_resp = client.get("/healthz")
 
@@ -159,7 +167,7 @@ def test_contextvars_no_bleed_after_image_request(client: TestClient) -> None:
         e
         for e in cap
         if e.get("event") == "request_completed"
-        and e.get("path") == "/nba/lakers/celtics/thumb"
+        and e.get("path") == image_path
     ]
     probe_completed = [
         e
@@ -195,13 +203,23 @@ def test_404_path_no_stale_cache_tier(client: TestClient) -> None:
     This test activates the 04-03 middleware: clear_contextvars() at request
     start erases "hit" from step 1 before step 2 binds anything.
     """
+    from matchup_thumbs.resolver import LeagueResolution
+
     hit_result = RenderResult(png=_make_png_bytes(), tier="hit")
     away = _team("lakers")
     home = _team("celtics")
+    lr = LeagueResolution(slug="nba", sport="basketball")
+
+    ok_path = "/basketball/nba/lakers/celtics/thumb"
+    not_found_path = "/basketball/nba/zzz/celtics/thumb"
 
     with _cap() as cap:
         # Step 1: successful image request
         with (
+            patch(
+                "matchup_thumbs.routes.images.resolve_league",
+                new=AsyncMock(return_value=lr),
+            ),
             patch(
                 "matchup_thumbs.routes.images.resolve",
                 new=AsyncMock(side_effect=[away, home]),
@@ -211,14 +229,20 @@ def test_404_path_no_stale_cache_tier(client: TestClient) -> None:
                 new=AsyncMock(return_value=hit_result),
             ),
         ):
-            ok_resp = client.get("/nba/lakers/celtics/thumb")
+            ok_resp = client.get(ok_path)
 
         # Step 2: 404 image request (away team not found)
-        with patch(
-            "matchup_thumbs.routes.images.resolve",
-            new=AsyncMock(return_value=None),
+        with (
+            patch(
+                "matchup_thumbs.routes.images.resolve_league",
+                new=AsyncMock(return_value=lr),
+            ),
+            patch(
+                "matchup_thumbs.routes.images.resolve",
+                new=AsyncMock(return_value=None),
+            ),
         ):
-            not_found_resp = client.get("/nba/zzz/celtics/thumb")
+            not_found_resp = client.get(not_found_path)
 
     assert ok_resp.status_code == 200
     assert not_found_resp.status_code == 404
@@ -228,7 +252,7 @@ def test_404_path_no_stale_cache_tier(client: TestClient) -> None:
         e
         for e in cap
         if e.get("event") == "request_completed"
-        and e.get("path") == "/nba/zzz/celtics/thumb"
+        and e.get("path") == not_found_path
     ]
     assert len(not_found_completed) == 1, "Expected 1 request_completed for 404"
 

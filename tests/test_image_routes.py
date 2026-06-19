@@ -270,8 +270,18 @@ def test_ncaaf_resolves_via_general_form(
 
 
 def test_old_ncaa_alias_path_gone(client: TestClient) -> None:
-    """Removed 5-seg /ncaa/{sport}/... path no longer matches any route (ROUTE-01)."""
-    resp = client.get("/ncaa/football/alabama/auburn/thumb")
+    """The /ncaa/football/... URL no longer maps to NCAA football (ROUTE-01).
+
+    With the 5-seg route, /ncaa/football/alabama/auburn/thumb matches as
+    sport=ncaa, league=football — but 'football' is not a valid league, so
+    resolve_league returns None → 404 league_not_found. The key property
+    (this URL does not serve NCAA football images) is preserved.
+    """
+    with patch(
+        "matchup_thumbs.routes.images.resolve_league",
+        new=AsyncMock(return_value=None),
+    ):
+        resp = client.get("/ncaa/football/alabama/auburn/thumb")
     assert resp.status_code == 404
 
 
