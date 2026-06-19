@@ -631,6 +631,121 @@ async def test_seed_degrade_no_truncate(
 
 
 # ---------------------------------------------------------------------------
+# Phase 17 Wave 0: sport_id seed idempotency (SPORT-02) — RED anchor
+# ---------------------------------------------------------------------------
+
+
+@pg_required
+async def test_seed_sport_id_idempotent(espn_nba_fixture: dict[str, Any]) -> None:
+    """SPORT-02: re-seeding the nba league never nulls or mis-points sport_id.
+
+    Runs seed_run twice against a real test DB and verifies that
+    leagues.sport_id for 'nba' is NOT NULL and identical across both runs.
+    This is a RED anchor until plan 03 adds the sport_id SET clause to seed.py.
+    """
+    import os
+
+    from psycopg_pool import AsyncConnectionPool
+    from redis.asyncio import Redis
+
+    from matchup_thumbs.seed import run as seed_run
+
+    postgres_dsn = os.environ.get("POSTGRES_DSN", "")
+    raw_dsn = postgres_dsn.replace("postgresql+psycopg://", "postgresql://")
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+    league_slug = "nba"
+    path, limit = LEAGUE_ENDPOINTS[league_slug]
+    base_url = "https://site.api.espn.com"
+    espn_url = f"{base_url}/apis/site/v2/sports/{path}/teams?limit={limit}"
+
+    conninfo = raw_dsn
+
+    try:
+        async with AsyncConnectionPool(
+            conninfo=conninfo, min_size=1, max_size=2
+        ) as pool:
+            redis_client: Redis = Redis.from_url(redis_url, decode_responses=False)
+            try:
+                # First seed run
+                transport1 = httpx.MockTransport(
+                    handler=_make_espn_mock_handler(espn_url, espn_nba_fixture)
+                )
+                async with httpx.AsyncClient(transport=transport1) as http_client:
+                    await seed_run(pool, redis_client, http_client, [league_slug])
+
+                # Check sport_id after first run
+                with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT sport_id FROM leagues WHERE slug = %(slug)s",
+                        {"slug": league_slug},
+                    )
+                    row1 = cur.fetchone()
+
+                assert row1 is not None, (
+                    "nba league row not found after first seed run"
+                )
+                sport_id_after_first: int | None = row1[0]
+                assert sport_id_after_first is not None, (
+                    "leagues.sport_id for 'nba' is NULL after first seed run — "
+                    "plan 03 must add sport_id to the seed UPDATE SET clause"
+                )
+
+                # Second seed run (idempotent)
+                transport2 = httpx.MockTransport(
+                    handler=_make_espn_mock_handler(espn_url, espn_nba_fixture)
+                )
+                async with httpx.AsyncClient(transport=transport2) as http_client2:
+                    await seed_run(pool, redis_client, http_client2, [league_slug])
+
+                # Check sport_id after second run — must be same non-null value
+                with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT sport_id FROM leagues WHERE slug = %(slug)s",
+                        {"slug": league_slug},
+                    )
+                    row2 = cur.fetchone()
+
+                assert row2 is not None, (
+                    "nba league row not found after second seed run"
+                )
+                sport_id_after_second: int | None = row2[0]
+                assert sport_id_after_second is not None, (
+                    "leagues.sport_id for 'nba' is NULL after second seed run — "
+                    "seed must write sport_id idempotently"
+                )
+                assert sport_id_after_second == sport_id_after_first, (
+                    f"sport_id changed between seed runs: "
+                    f"{sport_id_after_first} → {sport_id_after_second}"
+                )
+            finally:
+                await redis_client.aclose()
+    finally:
+        # Cleanup seeded teams inserted during this test
+        with psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM team_aliases
+                WHERE team_id IN (
+                    SELECT t.id FROM teams t
+                    JOIN leagues l ON l.id = t.league_id
+                    WHERE l.slug = 'nba'
+                      AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
+                )
+                """
+            )
+            cur.execute(
+                """
+                DELETE FROM teams t
+                USING leagues l
+                WHERE l.id = t.league_id
+                  AND l.slug = 'nba'
+                  AND t.slug IN ('los-angeles-lakers', 'los-angeles-clippers')
+                """
+            )
+
+
+# ---------------------------------------------------------------------------
 # 11-02 Task 1: fetch_league_logo_data — ESPN core API league-logo fetch (LGL-01)
 # ---------------------------------------------------------------------------
 
