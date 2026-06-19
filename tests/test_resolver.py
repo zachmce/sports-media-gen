@@ -561,6 +561,32 @@ async def test_resolve_league_direct_slug(
 
 
 @pg_required
+@pytest.mark.parametrize(
+    "slug",
+    ["milb-aaa", "milb-aa", "milb-high-a", "milb-single-a", "milb-rookie"],
+)
+async def test_resolve_league_hyphenated_canonical_slug(
+    seeded_registry: None,
+    live_pool: AsyncConnectionPool,
+    slug: str,
+) -> None:
+    """CR-01: hyphenated canonical slugs resolve directly via leagues.slug.
+
+    normalize_input strips hyphens, so the direct-slug match must use the
+    hyphen-preserving casefolded form. Without that fix every milb-* league
+    silently 404s on a direct canonical request.
+    """
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)
+    redis.set = AsyncMock()
+    redis.delete = AsyncMock()
+    result = await resolve_league(slug, live_pool, redis)
+    assert result is not None, f"hyphenated canonical slug {slug!r} failed to resolve"
+    assert result.slug == slug
+    assert result.sport == "baseball"
+
+
+@pg_required
 async def test_resolve_league_alias(
     seeded_registry: None,
     phase_aliases_seeded: None,

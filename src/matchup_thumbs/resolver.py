@@ -174,14 +174,22 @@ async def _fetch_team_by_id(
 
 async def _query_league_exact(
     pool: AsyncConnectionPool[Any],
-    norm: str,
+    alias_norm: str,
+    slug_match: str,
 ) -> tuple[str, str] | None:
-    """Stage 1 / Stage 2: exact match on normalized input, globally scoped.
+    """Stage 1 / Stage 2: exact match, globally scoped.
 
-    Matches the normalized input against ``league_aliases.alias`` (the alias
-    table) OR ``leagues.slug`` (direct canonical slug match).  The ``sports``
-    table is joined via ``leagues.sport_id`` — the canonical FK introduced in
-    Phase 17 — so both slug and sport are returned in a single query.
+    Matches ``alias_norm`` (the fully normalized input) against
+    ``league_aliases.alias`` OR ``slug_match`` (the casefolded raw input with
+    hyphens preserved) against ``leagues.slug``.  The two forms differ because
+    canonical slugs may contain hyphens (e.g. ``milb-aaa``) that
+    ``normalize_input`` strips — so the direct-slug branch MUST use the
+    hyphen-preserving casefolded form, otherwise every hyphenated league slug
+    (``milb-aaa``/``milb-aa``/``milb-high-a``/``milb-single-a``/``milb-rookie``)
+    silently fails the direct match and 404s (CR-01).  The ``sports`` table is
+    joined via ``leagues.sport_id`` so both slug and sport return in one query.
+
+    ``ORDER BY l.id`` makes the ``LIMIT 1`` tie-break deterministic (WR-01).
 
     Parameterised only — never string-formatted (T-02-08, T-18-INJ).
     """
@@ -192,13 +200,14 @@ async def _query_league_exact(
         WHERE l.id IN (
             SELECT la.league_id FROM league_aliases la WHERE la.alias = %s
         ) OR l.slug = %s
+        ORDER BY l.id
         LIMIT 1
     """
     async with (
         pool.connection() as conn,
         conn.cursor(row_factory=pg_rows.dict_row) as cur,
     ):
-        await cur.execute(sql, (norm, norm))
+        await cur.execute(sql, (alias_norm, slug_match))
         row = await cur.fetchone()
         if row is None:
             return None
@@ -298,6 +307,10 @@ async def resolve_league(
         return None
 
     norm = normalize_input(raw_input)
+    # Hyphen-preserving casefolded form for the direct ``leagues.slug`` match
+    # (CR-01): canonical slugs like ``milb-aaa`` keep their hyphens, which
+    # ``normalize_input`` strips.  The alias branch still uses ``norm``.
+    slug_match = raw_input.strip().casefold()
     cache_key = f"leagueresolve:{norm}".encode()
     miss_key = f"leagueresolve_miss:{norm}".encode()
 
@@ -324,7 +337,7 @@ async def resolve_league(
     # ------------------------------------------------------------------
     # Stage 1: exact match on normalized input (alias OR canonical slug).
     # ------------------------------------------------------------------
-    result = await _query_league_exact(pool, norm)
+    result = await _query_league_exact(pool, norm, slug_match)
 
     # ------------------------------------------------------------------
     # Stage 3: trigram fuzzy match over league_aliases.alias (GIN index).
