@@ -1605,3 +1605,167 @@ async def test_milb_rookie_no_alias_collisions() -> None:
         "ON CONFLICT DO NOTHING should handle locationName city-sharing collisions — "
         "check that the provider emits prefixed extra_aliases for uniqueness (D-06)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 18 Wave 0: league alias idempotency RED anchor (LALIAS-03)
+# ---------------------------------------------------------------------------
+
+
+@pg_required
+async def test_league_alias_seed_idempotent(
+    espn_nba_fixture: dict[str, Any],
+) -> None:
+    """LALIAS-03: seeding league aliases twice produces no duplicate rows and no errors.
+
+    Mirrors test_seed_sport_id_idempotent pattern (lines 638-744):
+    - call seed_run twice for milb-aaa (which has aliases in _LEAGUE_ALIASES)
+    - assert league_aliases rows exist after first run
+    - assert count is IDENTICAL after second run (ON CONFLICT DO NOTHING idempotent)
+
+    This is a RED anchor until Plan 04 adds _LEAGUE_ALIASES to seed.py and
+    the insert loop — the import fails before the test body runs.
+    """
+    import json as _json
+    import os
+    import re as _re
+    from pathlib import Path as _Path
+
+    import psycopg as _psycopg
+    from psycopg_pool import AsyncConnectionPool
+    from redis.asyncio import Redis
+
+    from matchup_thumbs.seed import _LEAGUE_ALIASES  # noqa: PLC0415 — RED anchor
+    from matchup_thumbs.seed import run as seed_run
+
+    postgres_dsn = os.environ.get("POSTGRES_DSN", "")
+    raw_dsn = postgres_dsn.replace("postgresql+psycopg://", "postgresql://")
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+    league_slug = "milb-aaa"
+    from matchup_thumbs.settings import settings as _settings
+
+    # MLB Stats API URL for milb-aaa (sportId=11)
+    stats_url = (
+        f"{_settings.mlb_statsapi_base_url}/api/v1/teams?sportId=11&activeStatus=Y"
+    )
+    # MiLB league shield URLs
+    shield_light_url = (
+        f"{_settings.mlb_logos_base_url}/league-on-light/milb.svg"
+    )
+    shield_dark_url = (
+        f"{_settings.mlb_logos_base_url}/league-on-dark/milb.svg"
+    )
+
+    # Load the recorded mlb-aaa fixture
+    fixture_path = (
+        _Path(__file__).parent / "fixtures" / "mlb_aaa_response.json"
+    )
+    mlb_aaa_fixture: dict[str, Any] = _json.loads(fixture_path.read_text())
+
+    # Load SVG mark fixture for per-team logo fetches
+    svg_bytes = (
+        _Path(__file__).parent / "fixtures" / "mlb_512.svg"
+    ).read_bytes()
+
+    # A tiny 1×1 SVG (not cairosvg-rasterized) for the league shield —
+    # seed degrades gracefully when rasterization fails (no cairosvg required).
+    tiny_svg = b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>"
+
+    def _milb_mock_handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == stats_url:
+            return httpx.Response(
+                200,
+                content=_json.dumps(mlb_aaa_fixture).encode(),
+                headers={"content-type": "application/json"},
+            )
+        if url in (shield_light_url, shield_dark_url):
+            return httpx.Response(200, content=tiny_svg)
+        if _re.match(
+            r"https://www\.mlbstatic\.com/team-logos/\d+\.svg", url
+        ):
+            return httpx.Response(200, content=svg_bytes)
+        return httpx.Response(404)
+
+    conninfo = raw_dsn
+
+    try:
+        async with AsyncConnectionPool(
+            conninfo=conninfo, min_size=1, max_size=2
+        ) as pool:
+            redis_client: Redis = Redis.from_url(redis_url, decode_responses=False)
+            try:
+                # First seed run
+                transport1 = httpx.MockTransport(handler=_milb_mock_handler)
+                async with httpx.AsyncClient(transport=transport1) as http_client:
+                    await seed_run(pool, redis_client, http_client, [league_slug])
+
+                # Check league_aliases count after first run
+                with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) FROM league_aliases
+                        WHERE league_id = (
+                            SELECT id FROM leagues WHERE slug = %(slug)s
+                        )
+                        """,
+                        {"slug": league_slug},
+                    )
+                    row1 = cur.fetchone()
+
+                assert row1 is not None, (
+                    "milb-aaa league row not found after first seed run"
+                )
+                count_after_first: int = row1[0]
+                assert count_after_first == len(_LEAGUE_ALIASES[league_slug]), (
+                    f"Expected {len(_LEAGUE_ALIASES[league_slug])} league_aliases "
+                    f"for '{league_slug}' after first seed run, got {count_after_first}"
+                )
+
+                # Second seed run (idempotent)
+                transport2 = httpx.MockTransport(handler=_milb_mock_handler)
+                async with httpx.AsyncClient(
+                    transport=transport2
+                ) as http_client2:
+                    await seed_run(
+                        pool, redis_client, http_client2, [league_slug]
+                    )
+
+                # Check count after second run — must be IDENTICAL (no duplicates)
+                with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) FROM league_aliases
+                        WHERE league_id = (
+                            SELECT id FROM leagues WHERE slug = %(slug)s
+                        )
+                        """,
+                        {"slug": league_slug},
+                    )
+                    row2 = cur.fetchone()
+
+                assert row2 is not None, (
+                    "milb-aaa league row not found after second seed run"
+                )
+                count_after_second: int = row2[0]
+                assert count_after_second == count_after_first, (
+                    f"league_aliases count changed between seed runs "
+                    f"({count_after_first} → {count_after_second}). "
+                    "ON CONFLICT DO NOTHING must make alias inserts idempotent."
+                )
+            finally:
+                await redis_client.aclose()
+    finally:
+        # Teardown: remove seeded league_aliases for milb-aaa
+        with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM league_aliases
+                WHERE league_id = (
+                    SELECT id FROM leagues WHERE slug = %(slug)s
+                )
+                """,
+                {"slug": league_slug},
+            )
+            conn.commit()
