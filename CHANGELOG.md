@@ -7,6 +7,43 @@ Versions correspond to annotated git tags (`v1.X.Y`) and GitHub Releases.
 
 ---
 
+## [Unreleased]
+
+### Breaking Changes
+
+#### Image route updated to 5-segment form (Phase 18 / ROUTE-03 / ROUTE-05)
+
+The general image route has changed from 4 segments to 5 segments to include
+the sport prefix:
+
+| Old path | New path |
+|----------|----------|
+| `/{league}/{away}/{home}/{kind}` | `/{sport}/{league}/{away}/{home}/{kind}` |
+
+Old 4-segment paths now return **404 Not Found** (no redirect — clean break,
+matching the v1.3 NCAA-route removal precedent per ROUTE-05).
+
+**Caller migration examples:**
+
+| Old path | New path |
+|----------|----------|
+| `/mlb/nyy/bos/thumb` | `/baseball/mlb/nyy/bos/thumb` |
+| `/nba/lakers/celtics/thumb` | `/basketball/nba/lakers/celtics/thumb` |
+| `/nfl/buf/kc/thumb` | `/football/nfl/buf/kc/thumb` |
+| `/nhl/tor/mtl/thumb` | `/hockey/nhl/tor/mtl/thumb` |
+| `/ncaaf/alabama/auburn/thumb` | `/football/ncaaf/alabama/auburn/thumb` |
+| `/milb-aaa/nyy/buf/thumb` | `/baseball/milb-aaa/nyy/buf/thumb` |
+
+The `{league}` segment accepts canonical slugs (`mlb`) or any registered alias
+(`triple-a` → `milb-aaa`). The `{sport}` segment must match the resolved
+league's actual sport or the request returns 404.
+
+Example: `/baseball/triple-a/buffalo-bisons/scranton-wilkes-barre/thumb` resolves
+`triple-a` → `milb-aaa` (canonical) and returns the matchup image. Contrast:
+`/football/mlb/nyy/bos/thumb` returns 404 (sport mismatch — mlb is baseball).
+
+---
+
 ## [1.3.0] — 2026-06-17
 
 ### Breaking Changes
