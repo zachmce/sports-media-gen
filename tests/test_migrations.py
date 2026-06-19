@@ -631,3 +631,91 @@ def test_migration_0005_milb_leagues_seeded() -> None:
         f"Expected MiLB league rows {expected} after migration 0005, got {found}. "
         "Run 'alembic upgrade head' with migration 0005 applied."
     )
+
+
+# ---------------------------------------------------------------------------
+# Migration 0007 — sport hierarchy + league aliases (SPORT-01, SPORT-02, LALIAS-01)
+# ---------------------------------------------------------------------------
+
+
+@pg_required
+def test_migration_0007_sports_table_exists() -> None:
+    """SPORT-01: sports table exists with 4 canonical rows after upgrade head."""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT slug FROM sports ORDER BY slug")
+        rows = cur.fetchall()
+
+    found = {row[0] for row in rows}
+    assert found == {"baseball", "basketball", "football", "hockey"}, (
+        f"Expected sports {{baseball, basketball, football, hockey}}, got {found}"
+    )
+
+
+@pg_required
+def test_migration_0007_sport_id_fk_column_exists() -> None:
+    """SPORT-01: leagues.sport_id is a NOT NULL column with FK to sports."""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_nullable
+            FROM information_schema.columns
+            WHERE table_name = 'leagues'
+              AND column_name = 'sport_id'
+            """
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "leagues.sport_id column does not exist"
+    assert row[0] == "NO", (
+        f"leagues.sport_id must be NOT NULL, got is_nullable={row[0]}"
+    )
+
+
+@pg_required
+def test_migration_0007_leagues_sport_id_not_null() -> None:
+    """SPORT-02: all leagues have a non-null sport_id after upgrade head."""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM leagues WHERE sport_id IS NULL")
+        row = cur.fetchone()
+
+    assert row is not None
+    assert row[0] == 0, (
+        f"Expected 0 leagues with sport_id IS NULL, got {row[0]}"
+    )
+
+
+@pg_required
+def test_migration_0007_league_aliases_table_exists() -> None:
+    """LALIAS-01: league_aliases exists with GIN index, global UNIQUE, and is empty."""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        # GIN index on league_aliases.alias
+        cur.execute(
+            """
+            SELECT indexname
+            FROM pg_indexes
+            WHERE tablename = 'league_aliases'
+              AND indexname = 'ix_league_aliases_alias_trgm'
+            """
+        )
+        idx = cur.fetchone()
+        assert idx is not None, "ix_league_aliases_alias_trgm index does not exist"
+
+        # Global unique constraint on alias
+        cur.execute(
+            """
+            SELECT conname
+            FROM pg_constraint
+            WHERE conname = 'uq_league_aliases_alias'
+              AND contype = 'u'
+            """
+        )
+        con = cur.fetchone()
+        assert con is not None, "uq_league_aliases_alias constraint does not exist"
+
+        # Table created empty in Phase 17 (LALIAS-03 seed is Phase 18)
+        cur.execute("SELECT count(*) FROM league_aliases")
+        empty = cur.fetchone()
+        assert empty is not None and empty[0] == 0, (
+            "league_aliases must be empty after Phase 17"
+            " (LALIAS-03 alias seeding is Phase 18)"
+        )
