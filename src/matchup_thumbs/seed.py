@@ -273,6 +273,32 @@ async def run(
                 )
             league_id: int = row[0]
 
+        # --- League alias upsert (Phase 18 D-07 / LALIAS-03) ---
+        # Mirrors the team_aliases insert loop (lines 342-369) with:
+        #   - global UNIQUE(alias) target (not per-league), so ON CONFLICT (alias)
+        #   - no team_id column
+        # Canonical slugs are matched directly by resolve_league Stage 1 against
+        # leagues.slug, so they are NOT seeded as alias rows.
+        raw_aliases = _LEAGUE_ALIASES.get(league_slug, [])
+        if raw_aliases:
+            async with pool.connection() as conn, conn.cursor() as cur:
+                for raw_alias in raw_aliases:
+                    norm_alias = normalize_input(raw_alias)
+                    await cur.execute(
+                        """
+                        INSERT INTO league_aliases (league_id, alias)
+                        VALUES (%(league_id)s, %(alias)s)
+                        ON CONFLICT (alias) DO NOTHING
+                        """,
+                        {"league_id": league_id, "alias": norm_alias},
+                    )
+                    if cur.rowcount == 0:
+                        await logger.awarning(
+                            "league_alias_collision_skipped",
+                            alias=norm_alias,
+                            league=league_slug,
+                        )
+
         await logger.ainfo(
             "seed_teams_fetched",
             league=league_slug,
