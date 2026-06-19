@@ -27,6 +27,12 @@ from matchup_thumbs.resolver import resolve
 from matchup_thumbs.settings import settings
 from tests.conftest import pg_required
 
+try:
+    from matchup_thumbs.resolver import LeagueResolution, resolve_league
+except ImportError:
+    resolve_league = None  # type: ignore[assignment]
+    LeagueResolution = None  # type: ignore[assignment,misc]
+
 # ---------------------------------------------------------------------------
 # Live pool fixture (guarded by pg_required)
 # ---------------------------------------------------------------------------
@@ -442,3 +448,146 @@ async def test_milb_resolver_cross_level_isolation(
                 (clippers_aaa_id,),
             )
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Phase 18 Wave 0: phase_aliases_seeded fixture
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def phase_aliases_seeded(
+    live_pool: AsyncConnectionPool,
+) -> AsyncIterator[None]:
+    """Insert the Phase 18 league aliases into league_aliases for testing.
+
+    Reads _LEAGUE_ALIASES from seed (not importable until Plan 04 — RED anchor
+    for test_resolve_league_alias).  Teardown deletes all inserted rows.
+    """
+    from matchup_thumbs.seed import _LEAGUE_ALIASES, normalize_input
+
+    raw_dsn = _POSTGRES_DSN.replace("postgresql+psycopg://", "postgresql://")
+    import psycopg as _psycopg  # local import to mirror conftest pattern
+
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        for slug, aliases in _LEAGUE_ALIASES.items():
+            cur.execute("SELECT id FROM leagues WHERE slug = %s", (slug,))
+            row = cur.fetchone()
+            if row is None:
+                continue
+            league_id = row[0]
+            for raw_alias in aliases:
+                norm = normalize_input(raw_alias)
+                cur.execute(
+                    "INSERT INTO league_aliases (league_id, alias) VALUES (%s, %s) "
+                    "ON CONFLICT (alias) DO NOTHING",
+                    (league_id, norm),
+                )
+        conn.commit()
+
+    yield
+
+    with _psycopg.connect(raw_dsn) as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM league_aliases")
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Phase 18 Wave 0: resolve_league unit tests (no Postgres needed)
+# ---------------------------------------------------------------------------
+
+
+async def test_resolve_league_overlong_input(
+    mock_pool: MagicMock,
+    mock_redis: MagicMock,
+) -> None:
+    """T-02-09 parity: input > 100 chars returns None without hitting Postgres."""
+    mock_redis.get = AsyncMock(return_value=None)
+    mock_redis.set = AsyncMock()
+    long_input = "a" * 101
+    result = await resolve_league(long_input, mock_pool, mock_redis)
+    assert result is None
+    mock_pool.connection.assert_not_called()
+
+
+async def test_resolve_league_miss(
+    mock_pool: MagicMock,
+    mock_redis: MagicMock,
+) -> None:
+    """Total miss sets negative cache (mirrors test_resolver_404 pattern)."""
+    mock_redis.get = AsyncMock(return_value=None)
+    mock_redis.set = AsyncMock()
+    result = await resolve_league("zzzznotaleague", mock_pool, mock_redis)
+    assert result is None
+    mock_redis.set.assert_called_once()
+    call_args = mock_redis.set.call_args
+    assert call_args[0][0] == b"leagueresolve_miss:zzzznotaleague"
+    assert call_args[0][1] == b"miss"
+    assert call_args[1].get("ex") == settings.resolve_negative_ttl
+
+
+async def test_resolve_league_negative_cache_short_circuits(
+    mock_pool: MagicMock,
+    mock_redis: MagicMock,
+) -> None:
+    """Negative cache hit skips all DB queries."""
+    mock_redis.get = AsyncMock(side_effect=[None, b"miss"])  # pos=None, neg=hit
+    mock_redis.set = AsyncMock()
+    result = await resolve_league("zzzznotaleague", mock_pool, mock_redis)
+    assert result is None
+    mock_pool.connection.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase 18 Wave 0: resolve_league integration tests (pg_required)
+# ---------------------------------------------------------------------------
+
+
+@pg_required
+async def test_resolve_league_direct_slug(
+    seeded_registry: None,
+    live_pool: AsyncConnectionPool,
+) -> None:
+    """Stage 1: canonical slug 'mlb' resolves directly via leagues.slug = %s."""
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)
+    redis.set = AsyncMock()
+    redis.delete = AsyncMock()
+    result = await resolve_league("mlb", live_pool, redis)
+    assert result is not None
+    assert isinstance(result, LeagueResolution)
+    assert result.slug == "mlb"
+    assert result.sport == "baseball"
+
+
+@pg_required
+async def test_resolve_league_alias(
+    seeded_registry: None,
+    phase_aliases_seeded: None,
+    live_pool: AsyncConnectionPool,
+) -> None:
+    """Stage 1 alias: 'triple-a' → normalize → 'triplea' → milb-aaa."""
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)
+    redis.set = AsyncMock()
+    redis.delete = AsyncMock()
+    result = await resolve_league("triple-a", live_pool, redis)
+    assert result is not None
+    assert result.slug == "milb-aaa"
+    assert result.sport == "baseball"
+
+
+@pg_required
+async def test_resolve_league_sport_returned(
+    seeded_registry: None,
+    live_pool: AsyncConnectionPool,
+) -> None:
+    """D-02: resolved LeagueResolution carries a non-empty sport from sports FK join."""
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)
+    redis.set = AsyncMock()
+    redis.delete = AsyncMock()
+    result = await resolve_league("nba", live_pool, redis)
+    assert result is not None
+    assert isinstance(result, LeagueResolution)
+    assert result.sport != ""
