@@ -42,7 +42,7 @@ def upgrade() -> None:
     op.create_table(
         "sports",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("slug", sa.Text(), nullable=False),          # e.g. "baseball"
+        sa.Column("slug", sa.Text(), nullable=False),  # e.g. "baseball"
         sa.Column("display_name", sa.Text(), nullable=False),  # e.g. "Baseball"
         sa.UniqueConstraint("slug", name="uq_sports_slug"),
     )
@@ -98,9 +98,7 @@ def upgrade() -> None:
     if null_count > 0:
         # Fetch offending slugs for a human-readable error message.
         offenders = bind.execute(
-            sa.text(
-                "SELECT slug FROM leagues WHERE sport_id IS NULL ORDER BY slug"
-            )
+            sa.text("SELECT slug FROM leagues WHERE sport_id IS NULL ORDER BY slug")
         )
         bad_slugs = [r[0] for r in offenders.fetchall()]
         raise RuntimeError(

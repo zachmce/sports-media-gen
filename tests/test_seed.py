@@ -682,9 +682,7 @@ async def test_seed_sport_id_idempotent(espn_nba_fixture: dict[str, Any]) -> Non
                     )
                     row1 = cur.fetchone()
 
-                assert row1 is not None, (
-                    "nba league row not found after first seed run"
-                )
+                assert row1 is not None, "nba league row not found after first seed run"
                 sport_id_after_first: int | None = row1[0]
                 assert sport_id_after_first is not None, (
                     "leagues.sport_id for 'nba' is NULL after first seed run — "

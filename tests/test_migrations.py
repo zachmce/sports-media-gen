@@ -679,9 +679,7 @@ def test_migration_0007_leagues_sport_id_not_null() -> None:
         row = cur.fetchone()
 
     assert row is not None
-    assert row[0] == 0, (
-        f"Expected 0 leagues with sport_id IS NULL, got {row[0]}"
-    )
+    assert row[0] == 0, f"Expected 0 leagues with sport_id IS NULL, got {row[0]}"
 
 
 @pg_required
