@@ -175,7 +175,8 @@ async def run(
                 """
                 UPDATE leagues
                 SET logo_url = %(logo_url)s,
-                    logo_variants = %(logo_variants)s
+                    logo_variants = %(logo_variants)s,
+                    sport_id = (SELECT id FROM sports WHERE slug = leagues.sport)
                 WHERE slug = %(slug)s
                 """,
                 {
