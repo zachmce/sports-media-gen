@@ -125,9 +125,14 @@ def mock_pool() -> MagicMock:
     cursor = AsyncMock()
     cursor.__aenter__ = AsyncMock(return_value=cursor)
     cursor.__aexit__ = AsyncMock(return_value=None)
+    cursor.fetchone = AsyncMock(return_value=None)
     conn.__aenter__ = AsyncMock(return_value=conn)
     conn.__aexit__ = AsyncMock(return_value=None)
-    conn.cursor.return_value = cursor
+    # Use a plain MagicMock (not AsyncMock) so that conn.cursor(row_factory=...)
+    # returns the cursor mock directly (as a sync context manager target), rather
+    # than returning a coroutine that Python cannot use with ``async with`` without
+    # an explicit ``await`` first.
+    conn.cursor = MagicMock(return_value=cursor)
     pool.connection.return_value = conn
     return pool
 

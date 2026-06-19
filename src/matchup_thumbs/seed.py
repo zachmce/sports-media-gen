@@ -63,6 +63,32 @@ logger = structlog.get_logger()
 
 _LEAGUE_LOGO_KEY_PREFIX: Final[str] = "leaguelogo"
 
+# ---------------------------------------------------------------------------
+# League alias seed data (Phase 18 — LALIAS-03 / D-07)
+#
+# Keyed by canonical league slug; values are the raw (pre-normalisation) alias
+# strings to insert into ``league_aliases``.  ``normalize_input`` is applied at
+# insert time so ``"triple-a"`` → ``"triplea"`` etc.
+#
+# Do NOT include canonical slugs themselves (e.g. ``"milb-aaa"``) — Stage 1 of
+# ``resolve_league`` matches ``leagues.slug`` directly without needing an alias.
+#
+# Do NOT add no-hyphen variants (e.g. ``"triplea"``): ``normalize_input`` strips
+# hyphens, so ``"triple-a"`` and ``"triplea"`` normalise identically — adding
+# both would create a duplicate row that ``ON CONFLICT (alias) DO NOTHING``
+# silently absorbs, wasting a row count verification.
+# ---------------------------------------------------------------------------
+
+_LEAGUE_ALIASES: dict[str, list[str]] = {
+    "ncaaf": ["college-football", "cfb"],
+    "ncaab": ["college-basketball", "cbb"],
+    "milb-aaa": ["triple-a", "aaa"],
+    "milb-aa": ["double-a", "aa"],
+    "milb-high-a": ["high-a"],
+    "milb-single-a": ["single-a"],
+    "milb-rookie": ["rookie"],
+}
+
 
 # ---------------------------------------------------------------------------
 # Normalisation (single canonical implementation — resolver imports from here)
