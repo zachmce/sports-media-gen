@@ -61,6 +61,10 @@ services:
     environment:
       POSTGRES_DSN: "postgresql+psycopg://${POSTGRES_USER:-matchup}:${POSTGRES_PASSWORD:-matchup}@postgres:5432/${POSTGRES_DB:-matchup}"
       REDIS_URL: "redis://redis:6379/0"
+      # Global render-cache kill-switch (CACHE-09/CACHE-10). Passthrough from the
+      # host/.env so operators can toggle it without a rebuild; default true keeps
+      # caching on (no behavior change when unset).
+      RENDER_CACHE_ENABLED: "${RENDER_CACHE_ENABLED:-true}"
     depends_on:
       migrate:
         condition: service_completed_successfully
