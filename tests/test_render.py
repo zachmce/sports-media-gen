@@ -574,6 +574,7 @@ async def test_singleflight_waiter() -> None:
 
     mock_settings = MagicMock(spec=Settings)
     mock_settings.render_version = 1
+    mock_settings.render_cache_enabled = True  # ensure bypass branch is not taken
     mock_settings.sf_lock_ttl = 10
     mock_settings.sf_poll_interval = 0.001  # fast polling in test
     mock_settings.sf_max_wait = 1.0
@@ -624,6 +625,7 @@ async def test_singleflight_degrade() -> None:
 
     mock_settings = MagicMock(spec=Settings)
     mock_settings.render_version = 1
+    mock_settings.render_cache_enabled = True  # ensure bypass branch is not taken
     mock_settings.sf_lock_ttl = 10
     mock_settings.sf_poll_interval = 0.001  # tiny so the loop exits fast
     mock_settings.sf_max_wait = 0.005  # very short → degrade immediately
@@ -848,6 +850,7 @@ async def test_singleflight_degrade_writes_cache() -> None:
 
     mock_settings = MagicMock(spec=Settings)
     mock_settings.render_version = 1
+    mock_settings.render_cache_enabled = True  # ensure bypass branch is not taken
     mock_settings.sf_lock_ttl = 10
     mock_settings.sf_poll_interval = 0.001
     mock_settings.sf_max_wait = 0.005  # very short → degrade immediately

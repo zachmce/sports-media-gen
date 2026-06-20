@@ -58,6 +58,7 @@ from matchup_thumbs.metrics import (
 )
 from matchup_thumbs.render import (
     CACHE_CONTROL_IMMUTABLE,
+    CACHE_CONTROL_NO_STORE,
     RenderResult,
     post_cache_transform,
     render_pipeline,
@@ -223,9 +224,18 @@ async def _handle_image(
         partial(post_cache_transform, result.png, kind, fmt, w)
     )
 
-    # (7) Return image response with immutable Cache-Control (CACHE-05).
+    # (7) Return image response with Cache-Control selected by the kill-switch
+    # (CACHE-05 / CACHE-10, D-04): immutable when caching is enabled (default),
+    # no-store when disabled so nginx proxy_cache also skips storing the response.
+    # The module-level settings singleton is used here (same object passed to
+    # render_pipeline at step 5) — no new plumbing required.
+    cache_control = (
+        CACHE_CONTROL_IMMUTABLE
+        if settings.render_cache_enabled
+        else CACHE_CONTROL_NO_STORE
+    )
     return Response(
         content=image_bytes,
         media_type=content_type,
-        headers={"Cache-Control": CACHE_CONTROL_IMMUTABLE},
+        headers={"Cache-Control": cache_control},
     )
