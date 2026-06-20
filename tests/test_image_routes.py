@@ -109,6 +109,25 @@ def test_image_route_cache_control_immutable(
     assert resp.headers["cache-control"] == CACHE_CONTROL_IMMUTABLE
 
 
+def test_image_no_store_when_disabled(
+    client: TestClient,
+    both_resolve_lakers_celtics: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag off → Cache-Control: no-store; nginx skips proxy_cache (CACHE-10, D-04).
+
+    Per RESEARCH Pitfall 3: the mocked render_pipeline does NOT drive the header —
+    images.py reads the module-level settings singleton directly.  Flip it via
+    monkeypatch.setattr on the attribute of the already-imported singleton.
+    """
+    monkeypatch.setattr(
+        "matchup_thumbs.routes.images.settings.render_cache_enabled", False
+    )
+    resp = client.get("/basketball/nba/lakers/celtics/thumb")
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "no-store"
+
+
 def test_unknown_away_team_404(client: TestClient, hit_result: RenderResult) -> None:
     """Unresolvable away team returns 404 with structured D-07 body (API-01)."""
     lr = LeagueResolution(slug="nba", sport="basketball")

@@ -117,6 +117,66 @@ def test_cache_control_constant() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CACHE-09: render_pipeline bypass skips ALL Redis render-tier calls (D-02)
+# ---------------------------------------------------------------------------
+
+
+async def test_render_bypass_skips_redis() -> None:
+    """Flag off → render bypasses Redis entirely; tier=='bypass' (CACHE-09, D-02).
+
+    Patches _render_and_encode to isolate the render-tier spy from the logo-tier
+    Redis calls that happen inside _render_and_encode (RESEARCH A3 / Pitfall 2).
+    Asserts that redis.get / redis.set / redis.eval are NEVER called when the
+    kill-switch is engaged — the "cache is never consulted" guarantee.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from matchup_thumbs.render import render_pipeline
+    from matchup_thumbs.settings import Settings
+
+    # Engage the kill-switch on a real Settings instance (mutable BaseSettings).
+    settings = Settings()
+    settings.render_cache_enabled = False  # type: ignore[misc]
+
+    # Redis spy: each method is an AsyncMock so assert_not_called() is available.
+    redis = MagicMock()
+    redis.get = AsyncMock(return_value=None)
+    redis.set = AsyncMock(return_value=None)
+    redis.eval = AsyncMock(return_value=1)
+
+    http_client = MagicMock()
+    pool = _make_mock_pool()
+
+    # Patch _render_and_encode so the logo-loader Redis calls inside it don't
+    # interfere with the render-tier spy (RESEARCH A3).
+    with patch(
+        "matchup_thumbs.render._render_and_encode",
+        new_callable=AsyncMock,
+        return_value=_make_synthetic_png(),
+    ):
+        result = await render_pipeline(
+            league="nba",
+            away=fixture_lakers(),
+            home=fixture_clippers(),
+            kind="thumb",
+            style=0,
+            redis=redis,
+            http_client=http_client,
+            settings=settings,
+            pool=pool,
+        )
+
+    # Bypass path guarantees: tier=="bypass", non-empty PNG bytes.
+    assert result.tier == "bypass"
+    assert isinstance(result.png, bytes) and len(result.png) > 0
+
+    # The render tier is NEVER consulted (CACHE-09 core guarantee, D-02).
+    redis.get.assert_not_called()
+    redis.set.assert_not_called()
+    redis.eval.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # GEN-04: Generator has no I/O; runs in threadpool
 # ---------------------------------------------------------------------------
 

@@ -41,3 +41,18 @@ def test_nginx_kinds_match_generator_registry() -> None:
         f"nginx only: {nginx_kinds - registry_kinds!r}\n"
         f"registry only: {registry_kinds - nginx_kinds!r}"
     )
+
+
+def test_nginx_does_not_ignore_cache_control() -> None:
+    """D-05: nginx template has no proxy_ignore_headers directive (CACHE-10 premise).
+
+    nginx honors upstream Cache-Control: no-store by default — no
+    proxy_ignore_headers Cache-Control is needed.  This guard fails if someone
+    adds such a directive, which would silently break the CACHE-10 kill-switch.
+    """
+    text = (Path(__file__).parent.parent / "nginx" / "nginx.conf.template").read_text()
+    assert "proxy_ignore_headers" not in text, (
+        "nginx.conf.template contains 'proxy_ignore_headers' — "
+        "this would prevent Cache-Control: no-store from signaling nginx to skip "
+        "its proxy_cache tier, breaking the CACHE-10 kill-switch (D-05)."
+    )
