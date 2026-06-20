@@ -157,7 +157,9 @@ class RenderResult(NamedTuple):
               ``"hit"`` (cache read hit),
               ``"miss"`` (this caller rendered as lock holder),
               ``"coalesced"`` (waiter received the holder's result),
-              ``"degraded"`` (singleflight timed out; rendered locally).
+              ``"degraded"`` (singleflight timed out; rendered locally),
+              ``"bypass"`` (render cache disabled via kill-switch; rendered
+              without consulting Redis).
     """
 
     png: bytes
