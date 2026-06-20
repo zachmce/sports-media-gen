@@ -6,7 +6,7 @@ loader import from here.
 
 Label cardinality is bounded (D-11):
 - render_latency_seconds: ≤ 6 leagues × 3 kinds = 18 series
-- render_cache_events_total: 4 tier values ("hit", "miss", "coalesced", "degraded")
+- render_cache_events_total: 5 tier values (hit/miss/coalesced/degraded/bypass)
 - resolution_total / resolution_misses_total: 6 league values each
 - espn_fetch_failures_total: no labels (unbounded counter — label would be
   unbounded by ESPN URL which violates D-11)
@@ -26,7 +26,7 @@ render_latency_seconds: Histogram = Histogram(
 )
 
 #: Render cache events, incremented once per render_pipeline() call (D-09/D-11).
-#: Label: tier ∈ {"hit", "miss", "coalesced", "degraded"} → 4 series.
+#: Label: tier ∈ {"hit", "miss", "coalesced", "degraded", "bypass"} → 5 series.
 render_cache_events_total: Counter = Counter(
     "render_cache_events_total",
     "Render cache events by tier",

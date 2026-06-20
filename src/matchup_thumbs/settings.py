@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     sf_poll_interval: float = 0.05  # seconds; waiter poll cadence (D-13)
     # seconds; max waiter wait before degraded local render (D-13/D-14)
     sf_max_wait: float = 5.0
+    # Global render-cache kill-switch (CACHE-09, Phase 20 D-01).
+    # Default True preserves v2.0 behavior exactly — no regression when the env
+    # var is absent.  Set RENDER_CACHE_ENABLED=false to bypass the Redis render
+    # tier entirely (no GET, no SET NX lock, no SET write, no EVAL release) AND
+    # emit Cache-Control: no-store so nginx proxy_cache skips storing the response
+    # too (CACHE-10).  Scope is the render tier only — the resolver cache and the
+    # logo-byte cache are unaffected.  Toggling requires only an env change and a
+    # container restart; no code change and no image rebuild (criterion 4).
+    # Pydantic v2 coerces "false"/"0"/"no"/"off" → False natively (no validator).
+    render_cache_enabled: bool = True
 
     # Contrast engine (Phase 9 — D-04, D-05)
     min_contrast_ratio: float = 3.0  # WCAG SC 1.4.11 Non-text Contrast (D-04)
