@@ -87,6 +87,11 @@ return 0
 #: Cache-Control header value for rendered responses (CACHE-05).
 CACHE_CONTROL_IMMUTABLE: str = "public, max-age=2592000, immutable"
 
+#: Cache-Control value emitted when the render kill-switch is engaged (CACHE-10).
+#: Signals nginx proxy_cache (and any client) not to store the response.
+#: Used in images.py when settings.render_cache_enabled is False.
+CACHE_CONTROL_NO_STORE: str = "no-store"
+
 #: Content-type constants for the two supported output formats.
 CONTENT_TYPE_PNG: str = "image/png"
 CONTENT_TYPE_WEBP: str = "image/webp"
@@ -673,6 +678,28 @@ async def render_pipeline(
     # ------------------------------------------------------------------
     if get_generator(kind, style) is None:
         raise UnknownGeneratorError(kind, style)
+
+    # ------------------------------------------------------------------
+    # CACHE-09 (D-02): global kill-switch — when the render cache is disabled,
+    # never consult Redis (no GET, no SET NX lock, no SET write, no EVAL release).
+    # Render directly and return without touching the render tier.
+    # D-02b: get_generator validation MUST remain above this branch so a bad
+    # (kind, style) still raises UnknownGeneratorError regardless of the flag.
+    # Note: _render_and_encode still receives redis/http_client because those
+    # serve the logo-byte cache (logo tier), which is intentionally unaffected
+    # by CACHE-09 (render tier only, per CONTEXT boundary).
+    # ------------------------------------------------------------------
+    if not settings.render_cache_enabled:
+        await logger.ainfo(
+            "render_cache_bypassed",
+            league=league,
+            kind=kind,
+            style=style,
+        )
+        png = await _render_and_encode(
+            league, away, home, kind, style, redis, http_client, settings, pool
+        )
+        return RenderResult(png=png, tier="bypass")
 
     render_key = _build_render_key(league, away, home, kind, style, settings)
     # Lock key mirrors the render key with a different prefix so the poll
