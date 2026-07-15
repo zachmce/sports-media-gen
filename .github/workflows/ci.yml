@@ -151,10 +151,16 @@ jobs:
       # downgraded and this upload would fail — skip it on fork PRs only. On
       # the workflow_call path (no pull_request event) the guard expression is
       # null/true, so the upload still runs there.
+      # An explicit category keeps this analysis keyed to the tool rather than to
+      # "<workflow-file>:<job>", which is the default. Without it, moving the job
+      # between workflow files renames the category, and code scanning reports
+      # "configuration not found" against the main baseline until the move lands.
+      # gitleaks above already does this; match it.
       - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
         if: always() && github.event.pull_request.head.repo.fork != true
         with:
           sarif_file: pip-audit.sarif
+          category: pip-audit
       # Gate: fail the job if pip-audit found vulnerabilities (after SARIF is uploaded).
       # This step is NOT fork-guarded — scans must still gate on fork PRs.
       - name: Gate on pip-audit result
