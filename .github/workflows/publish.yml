@@ -167,8 +167,10 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
-      # Install cosign for keyless signing (D-08, CI-05)
+      # Install legacy cosign (v2) for GHCR/Kyverno .sig-tag compatibility
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: 'v2.6.1'
 
       # Sign published image by digest with keyless OIDC (Pitfall 3: --yes required in CI)
       - name: Sign image by digest
