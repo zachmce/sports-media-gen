@@ -1,0 +1,27 @@
+version: 2
+
+updates:
+  # Python dependencies. Uses the "uv" ecosystem (not "pip") because this repo
+  # ships a uv.lock and ci.yml runs `uv sync --frozen`, which fails if the
+  # lockfile disagrees with pyproject.toml. The "uv" ecosystem updates both
+  # files together; "pip" only touches pyproject.toml and would land every
+  # Dependabot PR red on lint/typecheck/test.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+
+  # GitHub Actions. Dependabot preserves full-SHA pins and bumps the trailing
+  # version comment, so this stays compatible with the AGENTS.md SHA-pin rule.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]

@@ -73,3 +73,98 @@ jobs:
         env:
           POSTGRES_DSN: postgresql+psycopg://matchup:matchup@localhost:5432/matchup_test
           REDIS_URL: redis://localhost:6379/0
+
+  # Advisory on the PR path (pull_request), hard-gating on the publish path
+  # (workflow_call from publish.yml, whose caller `ci` job grants
+  # security-events: write). Required status checks stay exactly lint,
+  # typecheck, test — scan-secret/scan-deps are intentionally NOT required
+  # (design_intent: visible-but-not-blocking on PRs, still gates publish).
+  scan-secret:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      # Full history required so gitleaks scans all commits (Pitfall 1)
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          fetch-depth: 0
+      # Do NOT set GITLEAKS_LICENSE — personal repo, no key needed (Pitfall 7)
+      # Pitfall 6: capture exit code without aborting job — SARIF must upload first
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
+        id: gitleaks
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          # Fork PRs get a read-only token; gitleaks-action's default PR-comment
+          # behavior needs write access and would error. Disable it.
+          GITLEAKS_ENABLE_COMMENTS: false
+      # gitleaks writes no results.sarif when it has "no commits to scan" (e.g. tag
+      # pushes); fall back to a valid empty SARIF so the upload step never hard-fails.
+      - name: Ensure gitleaks SARIF exists
+        if: always()
+        run: |
+          if [ ! -f results.sarif ]; then
+            printf '%s' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"gitleaks","informationUri":"https://github.com/gitleaks/gitleaks","rules":[]}},"results":[]}]}' > results.sarif
+          fi
+      # Upload gitleaks SARIF to Security tab (if: always() so it uploads even on findings) — CI-04
+      # Fork PRs get a read-only token, so security-events: write is silently
+      # downgraded and this upload would fail — skip it on fork PRs only. On
+      # the workflow_call path (no pull_request event) the guard expression is
+      # null/true, so the upload still runs there.
+      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        if: always() && github.event.pull_request.head.repo.fork != true
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+      # Gate: fail the job if gitleaks found secrets (after SARIF is uploaded).
+      # This step is NOT fork-guarded — scans must still gate on fork PRs.
+      - name: Gate on gitleaks result
+        if: steps.gitleaks.outcome == 'failure'
+        run: |
+          echo "gitleaks found secrets; see the Security tab for details"
+          exit 1
+
+  scan-deps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          python-version: "3.14"
+      # Pitfall 6: capture exit code without aborting job — SARIF must upload first
+      - name: Run pip-audit
+        id: pip-audit
+        continue-on-error: true
+        run: |
+          uv export --frozen --no-dev --no-hashes \
+            | grep -v '^#' \
+            | uvx pip-audit -r /dev/stdin --no-deps -f json --output pip-audit.json
+      - name: Convert to SARIF
+        if: always()
+        run: python3 scripts/pip_audit_to_sarif.py pip-audit.json > pip-audit.sarif
+      # Fork PRs get a read-only token, so security-events: write is silently
+      # downgraded and this upload would fail — skip it on fork PRs only. On
+      # the workflow_call path (no pull_request event) the guard expression is
+      # null/true, so the upload still runs there.
+      # An explicit category keeps this analysis keyed to the tool rather than to
+      # "<workflow-file>:<job>", which is the default. Without it, moving the job
+      # between workflow files renames the category, and code scanning reports
+      # "configuration not found" against the main baseline until the move lands.
+      # gitleaks above already does this; match it.
+      - uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        if: always() && github.event.pull_request.head.repo.fork != true
+        with:
+          sarif_file: pip-audit.sarif
+          category: pip-audit
+      # Gate: fail the job if pip-audit found vulnerabilities (after SARIF is uploaded).
+      # This step is NOT fork-guarded — scans must still gate on fork PRs.
+      - name: Gate on pip-audit result
+        if: steps.pip-audit.outcome == 'failure'
+        run: |
+          echo "pip-audit found vulnerabilities; see the Security tab for details"
+          exit 1
