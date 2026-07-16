@@ -10,6 +10,17 @@ KNOWN_LEAGUES-validated slug to an integer sportId.  No user-supplied string
 ever reaches the URL — the dict lookup is the gate.  Mirrors
 ``_NCAA_SPORTBANNER_SPORTS`` in ``providers/espn.py``.
 
+``"milb"`` (the umbrella, T-ia6-02) is deliberately NOT a key of
+``_MILB_SPORT_IDS``: it is a logical union of the 4 affiliate levels, not a
+direct MLB Stats API sportId.  sportId 21 is literally named "Minor League
+Baseball" and looks like the obvious backing for the umbrella — it is a
+decoy that returns COVID-era "Alternate Training Site" rows and must never
+be reachable.  ``fetch_teams`` special-cases ``_MILB_UMBRELLA_SLUG`` and
+returns *before* the ``_MILB_SPORT_IDS`` lookup, fanning out sequentially
+over the fixed ``_MILB_UMBRELLA_FEEDERS`` tuple — each feeder is itself
+looked up through ``_MILB_SPORT_IDS``, so no user-supplied string ever
+selects a sportId (T-ia6-01).
+
 Rasterize-once / palette-extraction pattern (D-19, D-20, 15-06)
 ----------------------------------------------------------------
 ``fetch_teams`` fetches each team's SVG mark bytes once, rasterizes off the
@@ -49,13 +60,40 @@ logger = structlog.get_logger()
 # The URL is built only from settings.mlb_statsapi_base_url (a constant) +
 # the integer from this dict.  No user/API string ever reaches the URL — the
 # dict lookup is the gate: unknown slug → KeyError, no URL construction.
+#
+# The Single-A slug was hard-renamed 2026-07-16 (user-accepted breaking
+# change) — no compatibility alias is kept; the old (pre-rename) slug 404s.
+#
+# "milb" is intentionally NOT a key here — see the umbrella section below.
 _MILB_SPORT_IDS: Final[dict[str, int]] = {
     "milb-aaa": 11,
     "milb-aa": 12,
     "milb-high-a": 13,
-    "milb-single-a": 14,
+    "milb-a": 14,
     "milb-rookie": 16,  # Rookie: DSL (51) + ACL (15) + FCL (15) all under sportId=16
+    "milb-winter": 17,  # Winter Leagues: 48 teams, 0 collisions (verified 2026-07-16)
+    "milb-independent": 23,  # Independent: 72 teams, 0 collisions (verified 2026-07-16)
 }
+
+# ---------------------------------------------------------------------------
+# "milb" umbrella (T-ia6-01/02): logical union of the 4 affiliate levels
+# ---------------------------------------------------------------------------
+# _MILB_UMBRELLA_SLUG is the canonical slug seeded as its own `leagues` row
+# (option (a) — see PLAN.md "Umbrella design decision").  _MILB_UMBRELLA_FEEDERS
+# is a FIXED module-level tuple of the 4 affiliate slugs that back it —
+# milb-rookie is deliberately EXCLUDED (game-thumbs' stated feeder list is only
+# the 4 affiliate levels).  Every member of this tuple is itself a key of
+# _MILB_SPORT_IDS, so fetch_teams() still resolves each feeder's sportId
+# through the same fixed dict-lookup gate — no user-supplied string ever
+# selects a sportId, and sportId 21 (the "Minor League Baseball" decoy that
+# returns Alternate Training Site rows) is never consulted.
+_MILB_UMBRELLA_SLUG: Final[str] = "milb"
+_MILB_UMBRELLA_FEEDERS: Final[tuple[str, ...]] = (
+    "milb-aaa",
+    "milb-aa",
+    "milb-high-a",
+    "milb-a",
+)
 
 # Fixed complex-tag dict keyed by MLB Stats API league.id (integer — immune to
 # name drift).  Source: live statsapi.mlb.com query 2026-06-18.
@@ -191,8 +229,12 @@ class MLBStatsProvider:
     provider_name: str = "mlb"
 
     def list_leagues(self) -> list[str]:
-        """Return the 5 MiLB level slugs this provider covers."""
-        return list(_MILB_SPORT_IDS.keys())
+        """Return the 8 MiLB slugs this provider covers.
+
+        The 7 direct sportId slugs (_MILB_SPORT_IDS) plus the logical "milb"
+        umbrella (_MILB_UMBRELLA_SLUG), which has no sportId of its own.
+        """
+        return [*_MILB_SPORT_IDS, _MILB_UMBRELLA_SLUG]
 
     async def fetch_teams(
         self,
@@ -208,17 +250,38 @@ class MLBStatsProvider:
 
         Args:
             client:      Shared ``httpx.AsyncClient`` (D-02).
-            league_slug: One of the 5 supported slugs (KNOWN_LEAGUES gate applied
-                         upstream by seed.py before this call).
+            league_slug: One of the 8 supported slugs (KNOWN_LEAGUES gate applied
+                         upstream by seed.py before this call) — the 7
+                         ``_MILB_SPORT_IDS`` slugs, or the ``"milb"`` umbrella.
 
         Returns:
-            List of active ``ProviderTeam`` instances (active=True only).
+            List of active ``ProviderTeam`` instances (active=True only).  For
+            the ``"milb"`` umbrella, the concatenated union of all 4 feeder
+            levels (120 teams) — rookie is excluded by design.
 
         Raises:
-            KeyError: if ``league_slug`` is not in ``_MILB_SPORT_IDS`` (SSRF gate).
+            KeyError: if ``league_slug`` is not in ``_MILB_SPORT_IDS`` and is
+                not the umbrella slug (SSRF gate).
             httpx.HTTPStatusError: on MLB Stats API 4xx/5xx.
             pydantic.ValidationError: on unexpected MLB API response schema drift.
         """
+        # Umbrella branch — FIRST statement, before the _MILB_SPORT_IDS lookup
+        # (T-ia6-01/02): "milb" is a logical union with no sportId of its own.
+        # Feeders are awaited sequentially (not gathered concurrently) because
+        # each feeder already fans its own ~30 palette extractions out under
+        # its own semaphore — concurrent feeders would multiply in-flight CDN
+        # fetches by 4 and defeat espn_semaphore_size (T-ia6-04).
+        if league_slug == _MILB_UMBRELLA_SLUG:
+            umbrella_teams: list[ProviderTeam] = []
+            for feeder in _MILB_UMBRELLA_FEEDERS:
+                umbrella_teams.extend(await self.fetch_teams(client, feeder))
+            await logger.ainfo(
+                "milb_umbrella_fanout",
+                feeders=list(_MILB_UMBRELLA_FEEDERS),
+                team_count=len(umbrella_teams),
+            )
+            return umbrella_teams
+
         # KeyError on unknown slug (SSRF gate — never build URL before this lookup)
         sport_id = _MILB_SPORT_IDS[league_slug]
 
