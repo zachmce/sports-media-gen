@@ -85,8 +85,12 @@ _LEAGUE_ALIASES: dict[str, list[str]] = {
     "milb-aaa": ["triple-a", "aaa"],
     "milb-aa": ["double-a", "aa"],
     "milb-high-a": ["high-a"],
-    "milb-single-a": ["single-a"],
+    "milb-a": ["single-a"],
     "milb-rookie": ["rookie"],
+    "milb-winter": ["winter-leagues"],
+    "milb-independent": ["independent-league-baseball"],
+    # No entry for "milb" — Stage 1 of resolve_league matches leagues.slug
+    # directly for canonical slugs; do not seed canonical slugs as aliases.
 }
 
 

@@ -62,8 +62,9 @@ class Settings(BaseSettings):
     # Seed behaviour
     seed_leagues: str = (
         "nba,nfl,mlb,nhl,ncaaf,ncaab,"
-        "milb-aaa,milb-aa,milb-high-a,milb-single-a,milb-rookie"
-    )  # comma-separated; all 11 slugs (ESPN 6 + MiLB 5, Pitfall 4 — never drop ESPN)
+        "milb,milb-aaa,milb-aa,milb-high-a,milb-a,milb-rookie,"
+        "milb-winter,milb-independent"
+    )  # comma-separated; all 14 slugs (ESPN 6 + MiLB 8, Pitfall 4 — never drop ESPN)
     logo_cache_ttl: int = 30 * 24 * 3600  # 30 days in seconds
 
     # Resolver

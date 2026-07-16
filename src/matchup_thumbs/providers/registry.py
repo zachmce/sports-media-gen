@@ -32,8 +32,12 @@ _mlb: MLBStatsProvider = MLBStatsProvider()
 # ---------------------------------------------------------------------------
 # LEAGUE_REGISTRY: slug → DataProvider (D-09)
 # ---------------------------------------------------------------------------
-# All 6 ESPN slugs map to the ESPN singleton; the 5 MiLB slugs map to the
-# shared MLBStatsProvider singleton.  KNOWN_LEAGUES auto-derives to 11 (D-16).
+# All 6 ESPN slugs map to the ESPN singleton; the 8 MiLB slugs (quick task
+# 260716-ia6: Single-A hard-renamed to its game-thumbs-matching slug below,
+# plus the new milb umbrella, milb-winter, milb-independent) map to the
+# shared MLBStatsProvider singleton.  "milb" (umbrella, baseball minors) is
+# distinct from "mlb" (ESPN majors) — they differ by one letter and both
+# exist in this dict.  KNOWN_LEAGUES auto-derives to 14 (was 11).
 LEAGUE_REGISTRY: dict[str, DataProvider] = {
     "nba": _espn,
     "nfl": _espn,
@@ -41,11 +45,14 @@ LEAGUE_REGISTRY: dict[str, DataProvider] = {
     "nhl": _espn,
     "ncaaf": _espn,
     "ncaab": _espn,
+    "milb": _mlb,  # umbrella — logical union of the 4 affiliate levels below
     "milb-aaa": _mlb,  # Phase 15 — Triple-A
     "milb-aa": _mlb,  # Phase 15 — Double-A
     "milb-high-a": _mlb,  # Phase 15 — High-A
-    "milb-single-a": _mlb,  # Phase 15 — Single-A
+    "milb-a": _mlb,  # Single-A: hard-renamed slug, no compatibility alias
     "milb-rookie": _mlb,  # Phase 16 — Rookie (DSL/ACL/FCL, sportId=16)
+    "milb-winter": _mlb,  # Winter Leagues, sportId=17
+    "milb-independent": _mlb,  # Independent Leagues, sportId=23
 }
 
 # ---------------------------------------------------------------------------
@@ -55,6 +62,6 @@ LEAGUE_REGISTRY: dict[str, DataProvider] = {
 # that reaches a provider method must first be in KNOWN_LEAGUES, and
 # KNOWN_LEAGUES tracks the registry — so future providers are automatically
 # gated without any manual sync step.
-# KNOWN_LEAGUES now auto-derives to 11 slugs — SSRF gate + resolver scoping
-# extends automatically (D-10, D-16).
+# KNOWN_LEAGUES now auto-derives to 14 slugs (6 ESPN + 8 MiLB) — SSRF gate +
+# resolver scoping extends automatically (D-10, D-16).
 KNOWN_LEAGUES: frozenset[str] = frozenset(LEAGUE_REGISTRY.keys())

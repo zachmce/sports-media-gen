@@ -46,7 +46,7 @@ _EXPECTED_ESPN_SLUGS: frozenset[str] = frozenset(
     {"nba", "nfl", "mlb", "nhl", "ncaaf", "ncaab"}
 )
 
-# All 11 slugs post-Phase-16: 6 ESPN + 5 MiLB
+# All 14 slugs post-quick-260716-ia6: 6 ESPN + 8 MiLB
 _EXPECTED_ALL_SLUGS: frozenset[str] = frozenset(
     {
         "nba",
@@ -55,11 +55,14 @@ _EXPECTED_ALL_SLUGS: frozenset[str] = frozenset(
         "nhl",
         "ncaaf",
         "ncaab",
+        "milb",  # umbrella (quick-260716-ia6)
         "milb-aaa",
         "milb-aa",
         "milb-high-a",
-        "milb-single-a",
+        "milb-a",  # renamed from milb-single-a (quick-260716-ia6)
         "milb-rookie",  # Phase 16
+        "milb-winter",  # quick-260716-ia6
+        "milb-independent",  # quick-260716-ia6
     }
 )
 
@@ -73,12 +76,12 @@ def test_known_leagues_derives_from_registry() -> None:
     assert frozenset(LEAGUE_REGISTRY.keys()) == KNOWN_LEAGUES
 
 
-def test_known_leagues_has_eleven_slugs() -> None:
-    """LEAGUE_REGISTRY covers all 11 slugs (6 ESPN + 5 MiLB) post-Phase-16.
+def test_known_leagues_has_fourteen_slugs() -> None:
+    """LEAGUE_REGISTRY covers all 14 slugs (6 ESPN + 8 MiLB) post-quick-260716-ia6.
 
-    Updated from test_known_leagues_has_ten_slugs (Phase 15): adding milb-rookie
-    via LEAGUE_REGISTRY makes KNOWN_LEAGUES auto-grow to 11 (D-09).  This test
-    is RED until Plan 02 registers milb-rookie in registry.py (Phase 16 Wave 1).
+    Updated from test_known_leagues_has_eleven_slugs: adding the milb umbrella,
+    milb-winter, and milb-independent (and renaming milb-single-a -> milb-a)
+    makes KNOWN_LEAGUES grow from 11 to 14 (D-09).
     """
     assert KNOWN_LEAGUES == _EXPECTED_ALL_SLUGS
 
@@ -149,7 +152,7 @@ def test_mlb_provider_satisfies_protocol() -> None:
     """MILB-01: MLBStatsProvider is structurally compatible with DataProvider.
 
     Mirrors test_espn_provider_satisfies_protocol.
-    list_leagues() returns the 5 MiLB slugs (updated for Phase 16: milb-rookie).
+    list_leagues() returns 8 slugs: the 7 sportId slugs plus "milb" (umbrella).
     """
     _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
     _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
@@ -157,17 +160,27 @@ def test_mlb_provider_satisfies_protocol() -> None:
     provider: DataProvider = _MLBStatsProvider()  # type: ignore[assignment]
     result = provider.list_leagues()
     assert frozenset(result) == frozenset(
-        {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a", "milb-rookie"}
+        {
+            "milb",
+            "milb-aaa",
+            "milb-aa",
+            "milb-high-a",
+            "milb-a",
+            "milb-rookie",
+            "milb-winter",
+            "milb-independent",
+        }
     )
 
 
 def test_milb_sport_ids_is_gate() -> None:
     """D-03 / T-i3r-01: _MILB_SPORT_IDS is the SSRF gate for MiLB sport IDs.
 
-    Only the 5 MiLB slugs are keys with exact integer sportId values (updated
-    for Phase 16: milb-rookie added with sportId=16).  An unknown slug is NOT
-    present — a dict-lookup KeyError is the gate that prevents any
-    user/API-supplied string from reaching the MLB Stats API URL.
+    Exactly 7 keys with exact integer sportId values.  "milb-single-a" is gone
+    (hard-renamed to "milb-a", no alias) and "milb" (the umbrella) is
+    deliberately NOT a key — it has no sportId of its own (T-ia6-02).  An
+    unknown slug is NOT present — a dict-lookup KeyError is the gate that
+    prevents any user/API-supplied string from reaching the MLB Stats API URL.
     Mirrors test_ncaa_sportbanner_sports_is_gate (T-i3r-01 pattern).
     """
     _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
@@ -177,16 +190,181 @@ def test_milb_sport_ids_is_gate() -> None:
         "milb-aaa",
         "milb-aa",
         "milb-high-a",
-        "milb-single-a",
+        "milb-a",
         "milb-rookie",
+        "milb-winter",
+        "milb-independent",
     }
     assert _MILB_SPORT_IDS["milb-aaa"] == 11
     assert _MILB_SPORT_IDS["milb-aa"] == 12
     assert _MILB_SPORT_IDS["milb-high-a"] == 13
-    assert _MILB_SPORT_IDS["milb-single-a"] == 14
+    assert _MILB_SPORT_IDS["milb-a"] == 14
     assert _MILB_SPORT_IDS["milb-rookie"] == 16  # Phase 16 — Rookie: DSL+ACL+FCL
+    assert _MILB_SPORT_IDS["milb-winter"] == 17
+    assert _MILB_SPORT_IDS["milb-independent"] == 23
     # Out-of-scope slugs must NOT be in the gate dict
     assert "xyz" not in _MILB_SPORT_IDS
+    assert "milb-single-a" not in _MILB_SPORT_IDS  # hard rename, no alias
+    assert "milb" not in _MILB_SPORT_IDS  # umbrella has no sportId (T-ia6-02)
+    assert 21 not in _MILB_SPORT_IDS.values(), (
+        "sportId 21 ('Minor League Baseball') is a decoy returning COVID-era "
+        "'Alternate Training Site' rows and must never be reachable."
+    )
+
+
+def test_milb_umbrella_feeders_fixed_and_gate_integrity() -> None:
+    """T-ia6-01: _MILB_UMBRELLA_FEEDERS is fixed and every member is a gate key.
+
+    Feeders are the 4 affiliate levels only — milb-rookie is deliberately
+    excluded (game-thumbs' stated feeder list is only the 4 affiliate levels).
+    """
+    _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
+    _MILB_SPORT_IDS: dict[str, int] = _mlb._MILB_SPORT_IDS  # type: ignore[attr-defined]
+    _MILB_UMBRELLA_FEEDERS: tuple[str, ...] = _mlb._MILB_UMBRELLA_FEEDERS  # type: ignore[attr-defined]
+
+    assert _MILB_UMBRELLA_FEEDERS == ("milb-aaa", "milb-aa", "milb-high-a", "milb-a")
+    assert all(feeder in _MILB_SPORT_IDS for feeder in _MILB_UMBRELLA_FEEDERS), (
+        "Every umbrella feeder must be a key of _MILB_SPORT_IDS (gate integrity)."
+    )
+    assert "milb-rookie" not in _MILB_UMBRELLA_FEEDERS
+
+
+def test_mlb_fetch_teams_milb_umbrella_fans_out_four_feeders(httpx_mock: Any) -> None:
+    """T-ia6-01/02/04: fetch_teams("milb") issues exactly 4 requests (11/12/13/14).
+
+    Never sportId 16 (rookie) or 21 (decoy).  Returns the concatenated union.
+    """
+    import asyncio
+    import re as _re
+
+    try:
+        import cairosvg as _cs  # type: ignore[import-untyped]  # noqa: F401
+    except OSError:
+        pytest.skip("libcairo2 not installed locally — skipping raster-dependent test")
+
+    _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
+    _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
+
+    from matchup_thumbs.settings import settings as _settings
+
+    fixture_path = Path(__file__).parent / "fixtures" / "mlb_aaa_response.json"
+    fixture_data: dict[str, Any] = json.loads(fixture_path.read_text())
+    svg_fixture_bytes = (
+        Path(__file__).parent / "fixtures" / "mlb_512.svg"
+    ).read_bytes()
+
+    requested_sport_ids: list[int] = []
+
+    def _stats_callback(request: Any) -> Any:
+        import httpx as _httpx
+
+        requested_sport_ids.append(int(request.url.params["sportId"]))
+        return _httpx.Response(200, json=fixture_data)
+
+    httpx_mock.add_callback(
+        callback=_stats_callback,
+        url=_re.compile(
+            _re.escape(f"{_settings.mlb_statsapi_base_url}/api/v1/teams") + r"\?.*"
+        ),
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        url=_re.compile(r"https://www\.mlbstatic\.com/team-logos/\d+\.svg"),
+        content=svg_fixture_bytes,
+        is_reusable=True,
+    )
+
+    import httpx as _httpx
+
+    async def _run() -> list[Any]:
+        async with _httpx.AsyncClient() as client:
+            provider = _MLBStatsProvider()
+            return await provider.fetch_teams(client, "milb")
+
+    teams = asyncio.run(_run())
+
+    assert requested_sport_ids == [11, 12, 13, 14], (
+        f"Expected exactly sportIds [11, 12, 13, 14] in order, "
+        f"got {requested_sport_ids}"
+    )
+    assert 16 not in requested_sport_ids
+    assert 21 not in requested_sport_ids
+    assert len(teams) == 4 * len(fixture_data["teams"])
+
+
+def test_mlb_fetch_teams_winter_and_independent_no_complex_tag(
+    httpx_mock: Any,
+) -> None:
+    """T-ia6: fetch_teams for milb-winter/milb-independent skip Rookie-only paths.
+
+    extra_aliases == [] and no _MILB_COMPLEX_TAG_IDS consultation — both slugs
+    take the plain _derive_mlb_slug path (is_rookie gate stays False).
+    """
+    import asyncio
+    import re as _re
+
+    try:
+        import cairosvg as _cs  # type: ignore[import-untyped]  # noqa: F401
+    except OSError:
+        pytest.skip("libcairo2 not installed locally — skipping raster-dependent test")
+
+    _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
+    _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
+    _MILB_SPORT_IDS: dict[str, int] = _mlb._MILB_SPORT_IDS  # type: ignore[attr-defined]
+
+    from matchup_thumbs.settings import settings as _settings
+
+    fixture_path = Path(__file__).parent / "fixtures" / "mlb_aaa_response.json"
+    fixture_data: dict[str, Any] = json.loads(fixture_path.read_text())
+    svg_fixture_bytes = (
+        Path(__file__).parent / "fixtures" / "mlb_512.svg"
+    ).read_bytes()
+
+    for league_slug in ("milb-winter", "milb-independent"):
+        sport_id = _MILB_SPORT_IDS[league_slug]
+        stats_url = (
+            f"{_settings.mlb_statsapi_base_url}/api/v1/teams"
+            f"?sportId={sport_id}&activeStatus=Y"
+        )
+        httpx_mock.add_response(url=stats_url, json=fixture_data)
+        httpx_mock.add_response(
+            url=_re.compile(r"https://www\.mlbstatic\.com/team-logos/\d+\.svg"),
+            content=svg_fixture_bytes,
+            is_reusable=True,
+        )
+
+        import httpx as _httpx
+
+        async def _run(slug: str = league_slug) -> list[Any]:
+            async with _httpx.AsyncClient() as client:
+                provider = _MLBStatsProvider()
+                return await provider.fetch_teams(client, slug)
+
+        teams = asyncio.run(_run())
+        assert teams, f"Expected at least one team for {league_slug}"
+        for team in teams:
+            assert team.extra_aliases == [], (
+                f"Expected no extra_aliases for {league_slug} team "
+                f"{team.slug!r}, got {team.extra_aliases!r}"
+            )
+
+
+def test_mlb_fetch_teams_bogus_slug_still_raises_keyerror() -> None:
+    """T-ia6: fetch_teams("bogus") still raises KeyError (SSRF gate intact)."""
+    import asyncio
+
+    _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
+    _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
+
+    import httpx as _httpx
+
+    async def _run() -> None:
+        async with _httpx.AsyncClient() as client:
+            provider = _MLBStatsProvider()
+            await provider.fetch_teams(client, "bogus")
+
+    with pytest.raises(KeyError):
+        asyncio.run(_run())
 
 
 def test_mlb_fetch_teams_returns_provider_teams(httpx_mock: Any) -> None:
@@ -620,3 +798,80 @@ def test_mlb_rookie_fetch_teams_returns_provider_teams(httpx_mock: Any) -> None:
     assert dsl_team.logo_url.endswith(".svg"), (
         f"Expected logo_url ending with '.svg' (D-19), got {dsl_team.logo_url!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Quick task 260716-ia6: locationName schema-gap regression (discovered live
+# 2026-07-16 seeding milb-independent — Florence Y'Alls id=3798, Long Beach
+# Coast id=6490 both omit locationName entirely from the MLB Stats API).
+# ---------------------------------------------------------------------------
+
+
+def test_mlb_fetch_teams_missing_location_name_falls_back_to_short_name(
+    httpx_mock: Any,
+) -> None:
+    """A team entry missing locationName does not abort the whole league seed.
+
+    providers/mlb.py._effective_location_name falls back to shortName so the
+    entry still seeds with a usable location/slug instead of raising a
+    pydantic.ValidationError that would abort every other team in the league.
+    """
+    import asyncio
+    import re as _re
+
+    try:
+        import cairosvg as _cs  # type: ignore[import-untyped]  # noqa: F401
+    except OSError:
+        pytest.skip("libcairo2 not installed locally — skipping raster-dependent test")
+
+    _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
+    _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
+    _MILB_SPORT_IDS: dict[str, int] = _mlb._MILB_SPORT_IDS  # type: ignore[attr-defined]
+
+    from matchup_thumbs.settings import settings as _settings
+
+    svg_fixture_bytes = (
+        Path(__file__).parent / "fixtures" / "mlb_512.svg"
+    ).read_bytes()
+
+    # Minimal team entry with no locationName key at all — mirrors the live
+    # Florence Y'Alls (id=3798) payload shape.
+    fixture_data: dict[str, Any] = {
+        "teams": [
+            {
+                "id": 3798,
+                "name": "Florence Y'Alls",
+                "abbreviation": "FLO",
+                "teamName": "Y'Alls",
+                "shortName": "Florence",
+                "active": True,
+            }
+        ]
+    }
+
+    sport_id = _MILB_SPORT_IDS["milb-independent"]
+    stats_url = (
+        f"{_settings.mlb_statsapi_base_url}/api/v1/teams"
+        f"?sportId={sport_id}&activeStatus=Y"
+    )
+    httpx_mock.add_response(url=stats_url, json=fixture_data)
+    httpx_mock.add_response(
+        url=_re.compile(r"https://www\.mlbstatic\.com/team-logos/\d+\.svg"),
+        content=svg_fixture_bytes,
+        is_reusable=True,
+    )
+
+    import httpx as _httpx
+
+    async def _run() -> list[Any]:
+        async with _httpx.AsyncClient() as client:
+            provider = _MLBStatsProvider()
+            return await provider.fetch_teams(client, "milb-independent")
+
+    teams = asyncio.run(_run())
+    assert len(teams) == 1
+    team = teams[0]
+    assert team.location == "Florence", (
+        f"Expected fallback to shortName='Florence', got location={team.location!r}"
+    )
+    assert team.slug == "florence-y-alls"

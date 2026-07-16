@@ -46,8 +46,9 @@ _SKIP_REASON: str = (
 pg_required = pytest.mark.skipif(not _PG_AVAILABLE, reason=_SKIP_REASON)
 
 # Expected league slugs seeded by all migrations through head.
-# Updated for Phase 16: 0006 inserts milb-rookie league row.
-# Wave 0 note: test_leagues_seeded will be RED until migration 0006 is applied.
+# Updated for quick-260716-ia6: migration 0008 renames the Single-A slug to
+# its game-thumbs-matching form and inserts milb / milb-winter /
+# milb-independent.
 _EXPECTED_LEAGUES: frozenset[str] = frozenset(
     {
         "nba",
@@ -59,8 +60,11 @@ _EXPECTED_LEAGUES: frozenset[str] = frozenset(
         "milb-aaa",
         "milb-aa",
         "milb-high-a",
-        "milb-single-a",
+        "milb-a",  # migration 0008 — renamed (hard rename, no alias)
         "milb-rookie",  # Phase 16 — migration 0006
+        "milb",  # migration 0008 — umbrella
+        "milb-winter",  # migration 0008
+        "milb-independent",  # migration 0008
     }
 )
 
@@ -134,9 +138,10 @@ def test_alembic_upgrade_head() -> None:
     # The module fixture already ran upgrade; just verify the current revision.
     result = _run_alembic("current")
     assert result.returncode == 0, f"alembic current failed:\n{result.stderr}"
-    # Updated for Phase 17: migration 0007 (sport hierarchy + league aliases) is head.
-    assert "0007" in result.stdout or "0007" in result.stderr, (
-        f"Expected revision 0007 to be current.\n"
+    # Updated for quick-260716-ia6: migration 0008 (MiLB umbrella / winter /
+    # independent / Single-A rename) is head.
+    assert "0008" in result.stdout or "0008" in result.stderr, (
+        f"Expected revision 0008 to be current.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
@@ -612,24 +617,25 @@ def test_migration_0005_milb_leagues_seeded() -> None:
     """MILB-02: after upgrade head, all 4 MiLB affiliate level league rows exist.
 
     Requires a live Postgres with migration 0005 applied (pg_required).
-    Wave 0 note: this test skips when Postgres is absent; it will also fail
-    until migration 0005 is written and applied (Phase 15 Wave 1).
+    Updated for quick-260716-ia6: migration 0008 (which also runs as part of
+    upgrade head) renames the Single-A slug — this test describes the
+    post-0008 world, since these tests run against `upgrade head`.
     """
     with _pg_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT slug FROM leagues
-            WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
+            WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-a')
             ORDER BY slug
             """
         )
         rows = cur.fetchall()
 
     found = {row[0] for row in rows}
-    expected = {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a"}
+    expected = {"milb-aaa", "milb-aa", "milb-high-a", "milb-a"}
     assert found == expected, (
-        f"Expected MiLB league rows {expected} after migration 0005, got {found}. "
-        "Run 'alembic upgrade head' with migration 0005 applied."
+        f"Expected MiLB league rows {expected} after migration 0005+0008, "
+        f"got {found}. Run 'alembic upgrade head'."
     )
 
 
@@ -717,3 +723,207 @@ def test_migration_0007_league_aliases_table_exists() -> None:
             "league_aliases must be empty after Phase 17"
             " (LALIAS-03 alias seeding is Phase 18)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Migration 0008 — MiLB umbrella / winter / independent + Single-A rename
+# (quick task 260716-ia6)
+# ---------------------------------------------------------------------------
+
+
+def test_migration_0008_chains_off_0007() -> None:
+    """Migration 0008 declares down_revision='0007' (chain integrity).
+
+    Does NOT require live Postgres — reads the migration file directly so it
+    always runs and guards against revision-chain breakage.
+    Mirrors test_migration_0007_chains_off_0006.
+
+    Chain must be: 0001 → ... → 0006 → 0007 → 0008.
+    """
+    import ast
+    import pathlib
+
+    migration_path = (
+        pathlib.Path(__file__).parent.parent
+        / "migrations"
+        / "versions"
+        / "0008_milb_umbrella_winter_independent.py"
+    )
+    assert migration_path.exists(), (
+        f"Migration file not found: {migration_path}. "
+        "Create migrations/versions/0008_milb_umbrella_winter_independent.py"
+        " (quick task 260716-ia6)."
+    )
+
+    tree = ast.parse(migration_path.read_text())
+    assigns = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            assigns[node.target.id] = node.value
+
+    revision_node = assigns.get("revision")
+    down_revision_node = assigns.get("down_revision")
+
+    assert revision_node is not None, "revision not found in 0008 migration"
+    assert down_revision_node is not None, "down_revision not found in 0008 migration"
+
+    assert isinstance(revision_node, ast.Constant), "revision must be a string literal"
+    assert isinstance(down_revision_node, ast.Constant), (
+        "down_revision must be a string literal"
+    )
+
+    assert revision_node.value == "0008", (
+        f"Expected revision='0008', got '{revision_node.value}'"
+    )
+    assert down_revision_node.value == "0007", (
+        f"Expected down_revision='0007', got '{down_revision_node.value}' "
+        "(chain must be 0001→...→0006→0007→0008, not skip 0007)"
+    )
+
+
+@pg_required
+def test_alembic_heads_reports_single_head_0008() -> None:
+    """`alembic heads` reports exactly one head: 0008."""
+    result = _run_alembic("heads")
+    assert result.returncode == 0, f"alembic heads failed:\n{result.stderr}"
+    combined = result.stdout + result.stderr
+    assert "0008" in combined, f"Expected 0008 in `alembic heads` output:\n{combined}"
+    # Exactly one head line (no branch split)
+    head_lines = [
+        line for line in combined.splitlines() if line.strip() and "(head)" in line
+    ]
+    assert len(head_lines) == 1, (
+        f"Expected exactly one head, got {len(head_lines)}: {head_lines}"
+    )
+
+
+@pg_required
+def test_migration_0008_rename_preserves_league_id() -> None:
+    """The Single-A rename is an UPDATE, not DELETE+INSERT — id is unchanged.
+
+    FK children (teams.league_id, team_aliases.league_id) and the pre-existing
+    'singlea' league_aliases row all keep pointing at the same league.id
+    across the rename — zero orphans.
+    """
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, slug, display_name FROM leagues WHERE slug = 'milb-a'")
+        row = cur.fetchone()
+
+    assert row is not None, "Expected a 'milb-a' league row after migration 0008"
+    league_id, slug, display_name = row
+    assert slug == "milb-a"
+    assert display_name == "Single-A"
+
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT slug FROM leagues WHERE slug = 'milb-single-a'")
+        old_row = cur.fetchone()
+    assert old_row is None, (
+        "'milb-single-a' must not exist as a league slug after the hard rename "
+        "(no compatibility alias)"
+    )
+
+
+@pg_required
+def test_migration_0008_new_leagues_have_sport_id() -> None:
+    """milb / milb-winter / milb-independent all have sport='baseball' AND
+
+    a non-null sport_id (0007 made leagues.sport_id NOT NULL — the trap 0005/
+    0006 did not face).
+    """
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT l.slug, l.sport, l.sport_id, s.slug AS sport_slug
+            FROM leagues l
+            JOIN sports s ON s.id = l.sport_id
+            WHERE l.slug IN ('milb', 'milb-winter', 'milb-independent')
+            ORDER BY l.slug
+            """
+        )
+        rows = cur.fetchall()
+
+    found = {row[0] for row in rows}
+    assert found == {"milb", "milb-winter", "milb-independent"}, (
+        f"Expected milb/milb-winter/milb-independent league rows, got {found}"
+    )
+    for slug, sport, sport_id, sport_slug in rows:
+        assert sport == "baseball", f"{slug}: expected sport='baseball', got {sport!r}"
+        assert sport_id is not None, f"{slug}: sport_id must not be NULL"
+        assert sport_slug == "baseball", (
+            f"{slug}: expected sport_id to join to the baseball sports row"
+        )
+
+
+@pg_required
+def test_migration_0008_display_names() -> None:
+    """Display names mirror the reference's League Name column."""
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT slug, display_name FROM leagues
+            WHERE slug IN ('milb', 'milb-winter', 'milb-independent')
+            """
+        )
+        rows = dict(cur.fetchall())
+
+    assert rows["milb"] == "Minor League Baseball"
+    assert rows["milb-winter"] == "Winter Leagues"
+    assert rows["milb-independent"] == "Independent League Baseball"
+
+
+@pg_required
+def test_migration_0008_downgrade_upgrade_idempotent() -> None:
+    """downgrade from 0008 removes the 3 rows and restores the Single-A slug;
+
+    upgrade -> downgrade -> upgrade is idempotent.
+    """
+    result_down = _run_alembic("downgrade", "0007")
+    assert result_down.returncode == 0, (
+        f"alembic downgrade 0007 failed:\nstdout: {result_down.stdout}\n"
+        f"stderr: {result_down.stderr}"
+    )
+
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT slug FROM leagues
+            WHERE slug IN ('milb', 'milb-winter', 'milb-independent',
+                            'milb-a', 'milb-single-a')
+            """
+        )
+        rows = {row[0] for row in cur.fetchall()}
+
+    assert rows == {"milb-single-a"}, (
+        f"After downgrade to 0007, expected only 'milb-single-a' to be present "
+        f"among the affected slugs, got {rows}"
+    )
+
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT display_name FROM leagues WHERE slug = 'milb-single-a'")
+        row = cur.fetchone()
+    assert row is not None and row[0] == "Single-A"
+
+    result_up = _run_alembic("upgrade", "head")
+    assert result_up.returncode == 0, (
+        f"alembic upgrade head failed:\nstdout: {result_up.stdout}\n"
+        f"stderr: {result_up.stderr}"
+    )
+
+    with _pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT slug FROM leagues
+            WHERE slug IN ('milb', 'milb-winter', 'milb-independent',
+                            'milb-a', 'milb-single-a')
+            ORDER BY slug
+            """
+        )
+        rows2 = {row[0] for row in cur.fetchall()}
+
+    assert rows2 == {"milb", "milb-winter", "milb-independent", "milb-a"}, (
+        f"After re-upgrade to head, expected the 4 renamed/new slugs, got {rows2}"
+    )

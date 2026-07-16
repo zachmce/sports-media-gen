@@ -185,9 +185,10 @@ async def _query_league_exact(
     canonical slugs may contain hyphens (e.g. ``milb-aaa``) that
     ``normalize_input`` strips — so the direct-slug branch MUST use the
     hyphen-preserving casefolded form, otherwise every hyphenated league slug
-    (``milb-aaa``/``milb-aa``/``milb-high-a``/``milb-single-a``/``milb-rookie``)
-    silently fails the direct match and 404s (CR-01).  The ``sports`` table is
-    joined via ``leagues.sport_id`` so both slug and sport return in one query.
+    (``milb-aaa``/``milb-aa``/``milb-high-a``/``milb-a``/``milb-rookie``/
+    ``milb-winter``/``milb-independent``) silently fails the direct match and
+    404s (CR-01).  The ``sports`` table is joined via ``leagues.sport_id`` so
+    both slug and sport return in one query.
 
     ``ORDER BY l.id`` makes the ``LIMIT 1`` tie-break deterministic (WR-01).
 

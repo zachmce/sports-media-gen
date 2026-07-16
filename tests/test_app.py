@@ -46,9 +46,7 @@ def test_milb_league_slug_accepted() -> None:
     """
     from matchup_thumbs.providers.registry import KNOWN_LEAGUES
 
-    _expected_milb_slugs = frozenset(
-        {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a"}
-    )
+    _expected_milb_slugs = frozenset({"milb-aaa", "milb-aa", "milb-high-a", "milb-a"})
     missing = _expected_milb_slugs - KNOWN_LEAGUES
     assert not missing, (
         f"MiLB slugs not yet in KNOWN_LEAGUES: {missing}. "

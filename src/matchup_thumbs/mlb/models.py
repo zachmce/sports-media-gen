@@ -43,7 +43,6 @@ class MLBTeamEntry(BaseModel):
     name: str  # full name e.g. "Toledo Mud Hens" → display_name
     abbreviation: str  # e.g. "TOL" → abbreviation
     teamName: str  # mascot e.g. "Mud Hens" → name, short_display_name (Pitfall 7)
-    locationName: str  # city e.g. "Toledo" → location
     active: bool = True
 
     # Optional — tolerated-but-unused by the provider; do not fail-loudly on
@@ -51,6 +50,14 @@ class MLBTeamEntry(BaseModel):
     # teamName per Pitfall 7), so an upstream rename/removal of this unread
     # field must not abort the whole league seed (WR-01). shortName is
     # unreliable across all teams (Assumption A1).
+    #
+    # locationName (quick-260716-ia6): confirmed live 2026-07-16 that a small
+    # number of milb-independent teams (e.g. Florence Y'Alls id=3798, Long
+    # Beach Coast id=6490) omit locationName entirely from the MLB Stats API
+    # response — an upstream schema gap, not a bug in this codebase.  Made
+    # Optional (was required) so one malformed team no longer aborts the
+    # entire league seed (WR-01); providers/mlb.py falls back to shortName.
+    locationName: str | None = None  # city e.g. "Toledo" → location
     clubName: str | None = None
     shortName: str | None = None
 
