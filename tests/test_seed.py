@@ -1466,12 +1466,12 @@ async def test_milb_no_intra_level_alias_collisions() -> None:
         cur.execute(
             """
                 SELECT slug FROM leagues
-                WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
+                WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-a')
                 """
         )
         present_leagues = {row[0] for row in cur.fetchall()}
 
-    expected_milb = {"milb-aaa", "milb-aa", "milb-high-a", "milb-single-a"}
+    expected_milb = {"milb-aaa", "milb-aa", "milb-high-a", "milb-a"}
     if present_leagues != expected_milb:
         pytest.skip(
             f"MiLB league rows not fully seeded yet (need {expected_milb}, "
@@ -1484,7 +1484,7 @@ async def test_milb_no_intra_level_alias_collisions() -> None:
             """
                 SELECT COUNT(*) FROM teams t
                 JOIN leagues l ON l.id = t.league_id
-                WHERE l.slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
+                WHERE l.slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-a')
                 """
         )
         team_count_row = cur.fetchone()
@@ -1503,7 +1503,7 @@ async def test_milb_no_intra_level_alias_collisions() -> None:
             FROM team_aliases
             WHERE league_id IN (
                 SELECT id FROM leagues
-                WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-single-a')
+                WHERE slug IN ('milb-aaa', 'milb-aa', 'milb-high-a', 'milb-a')
             )
             GROUP BY alias, league_id
             HAVING COUNT(*) > 1
@@ -1755,3 +1755,106 @@ async def test_league_alias_seed_idempotent(
                 {"slug": league_slug},
             )
             conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Quick task 260716-ia6: settings/compose drift guards (pure-Python, no DB)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_seed_leagues_has_fourteen_known_slugs() -> None:
+    """settings.seed_leagues splits to exactly 14 slugs, all in KNOWN_LEAGUES.
+
+    The 6 ESPN slugs must remain present (Pitfall 4 — never drop ESPN).
+    """
+    from matchup_thumbs.providers.registry import KNOWN_LEAGUES
+    from matchup_thumbs.settings import settings
+
+    slugs = [s.strip() for s in settings.seed_leagues.split(",")]
+    assert len(slugs) == 14, (
+        f"Expected 14 seed_leagues slugs, got {len(slugs)}: {slugs}"
+    )
+    unknown = [s for s in slugs if s not in KNOWN_LEAGUES]
+    assert not unknown, f"seed_leagues has slugs not in KNOWN_LEAGUES: {unknown}"
+
+    espn_slugs = {"nba", "nfl", "mlb", "nhl", "ncaaf", "ncaab"}
+    assert espn_slugs.issubset(set(slugs)), (
+        f"seed_leagues must retain all 6 ESPN slugs (Pitfall 4), got {slugs}"
+    )
+
+
+def test_docker_compose_seed_leagues_matches_settings_default() -> None:
+    """docker-compose.yml SEED_LEAGUES default set-equals settings.seed_leagues.
+
+    Both places must be updated in lockstep or new leagues have league rows
+    but zero teams in the deployed container.
+    """
+    import re
+    from pathlib import Path
+
+    from matchup_thumbs.settings import settings
+
+    compose_path = Path(__file__).parent.parent / "docker-compose.yml"
+    compose_text = compose_path.read_text()
+
+    match = re.search(r"SEED_LEAGUES:\s*\"\$\{SEED_LEAGUES:-([^}]+)\}\"", compose_text)
+    assert match is not None, (
+        "Could not find SEED_LEAGUES default in docker-compose.yml — "
+        'expected a line like SEED_LEAGUES: "${SEED_LEAGUES:-a,b,c}"'
+    )
+    compose_slugs = {s.strip() for s in match.group(1).split(",")}
+    settings_slugs = {s.strip() for s in settings.seed_leagues.split(",")}
+
+    assert compose_slugs == settings_slugs, (
+        f"docker-compose.yml SEED_LEAGUES default {compose_slugs} must set-equal "
+        f"settings.seed_leagues {settings_slugs} — they must never drift apart."
+    )
+
+
+def test_league_aliases_keys_are_subset_of_known_leagues() -> None:
+    """Every key of _LEAGUE_ALIASES is a member of KNOWN_LEAGUES (dead-alias guard)."""
+    from matchup_thumbs.providers.registry import KNOWN_LEAGUES
+    from matchup_thumbs.seed import _LEAGUE_ALIASES
+
+    unknown = set(_LEAGUE_ALIASES.keys()) - KNOWN_LEAGUES
+    assert not unknown, f"_LEAGUE_ALIASES has dead keys not in KNOWN_LEAGUES: {unknown}"
+
+
+def test_league_aliases_milb_a_and_no_milb_umbrella_entry() -> None:
+    """_LEAGUE_ALIASES maps 'milb-a' (not 'milb-single-a') and has no 'milb' entry."""
+    from matchup_thumbs.seed import _LEAGUE_ALIASES
+
+    assert "milb-a" in _LEAGUE_ALIASES
+    assert _LEAGUE_ALIASES["milb-a"] == ["single-a"]
+    assert "milb-single-a" not in _LEAGUE_ALIASES
+    assert "milb" not in _LEAGUE_ALIASES, (
+        "'milb' (the umbrella) must have no _LEAGUE_ALIASES entry — Stage 1 of "
+        "resolve_league matches leagues.slug directly for canonical slugs."
+    )
+
+
+@pg_required
+async def test_seed_run_rejects_milb_single_a() -> None:
+    """seed.run(...) with the old Single-A slug raises ValueError.
+
+    The slug is gone from KNOWN_LEAGUES after the hard rename.
+    """
+    import os
+
+    from psycopg_pool import AsyncConnectionPool
+    from redis.asyncio import Redis
+
+    from matchup_thumbs.seed import run as seed_run
+
+    postgres_dsn = os.environ.get("POSTGRES_DSN", "")
+    raw_dsn = postgres_dsn.replace("postgresql+psycopg://", "postgresql://")
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+    async with AsyncConnectionPool(conninfo=raw_dsn, min_size=1, max_size=2) as pool:
+        redis_client: Redis = Redis.from_url(redis_url, decode_responses=False)
+        try:
+            async with httpx.AsyncClient() as http_client:
+                with pytest.raises(ValueError, match="milb-single-a"):
+                    await seed_run(pool, redis_client, http_client, ["milb-single-a"])
+        finally:
+            await redis_client.aclose()

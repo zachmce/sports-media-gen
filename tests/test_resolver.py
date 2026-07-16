@@ -563,7 +563,16 @@ async def test_resolve_league_direct_slug(
 @pg_required
 @pytest.mark.parametrize(
     "slug",
-    ["milb-aaa", "milb-aa", "milb-high-a", "milb-single-a", "milb-rookie"],
+    [
+        "milb-aaa",
+        "milb-aa",
+        "milb-high-a",
+        "milb-a",
+        "milb-rookie",
+        "milb",
+        "milb-winter",
+        "milb-independent",
+    ],
 )
 async def test_resolve_league_hyphenated_canonical_slug(
     seeded_registry: None,
