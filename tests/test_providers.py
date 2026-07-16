@@ -798,3 +798,80 @@ def test_mlb_rookie_fetch_teams_returns_provider_teams(httpx_mock: Any) -> None:
     assert dsl_team.logo_url.endswith(".svg"), (
         f"Expected logo_url ending with '.svg' (D-19), got {dsl_team.logo_url!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Quick task 260716-ia6: locationName schema-gap regression (discovered live
+# 2026-07-16 seeding milb-independent — Florence Y'Alls id=3798, Long Beach
+# Coast id=6490 both omit locationName entirely from the MLB Stats API).
+# ---------------------------------------------------------------------------
+
+
+def test_mlb_fetch_teams_missing_location_name_falls_back_to_short_name(
+    httpx_mock: Any,
+) -> None:
+    """A team entry missing locationName does not abort the whole league seed.
+
+    providers/mlb.py._effective_location_name falls back to shortName so the
+    entry still seeds with a usable location/slug instead of raising a
+    pydantic.ValidationError that would abort every other team in the league.
+    """
+    import asyncio
+    import re as _re
+
+    try:
+        import cairosvg as _cs  # type: ignore[import-untyped]  # noqa: F401
+    except OSError:
+        pytest.skip("libcairo2 not installed locally — skipping raster-dependent test")
+
+    _mlb = pytest.importorskip("matchup_thumbs.providers.mlb", reason=_MLB_SKIP_REASON)
+    _MLBStatsProvider = _mlb.MLBStatsProvider  # type: ignore[attr-defined]
+    _MILB_SPORT_IDS: dict[str, int] = _mlb._MILB_SPORT_IDS  # type: ignore[attr-defined]
+
+    from matchup_thumbs.settings import settings as _settings
+
+    svg_fixture_bytes = (
+        Path(__file__).parent / "fixtures" / "mlb_512.svg"
+    ).read_bytes()
+
+    # Minimal team entry with no locationName key at all — mirrors the live
+    # Florence Y'Alls (id=3798) payload shape.
+    fixture_data: dict[str, Any] = {
+        "teams": [
+            {
+                "id": 3798,
+                "name": "Florence Y'Alls",
+                "abbreviation": "FLO",
+                "teamName": "Y'Alls",
+                "shortName": "Florence",
+                "active": True,
+            }
+        ]
+    }
+
+    sport_id = _MILB_SPORT_IDS["milb-independent"]
+    stats_url = (
+        f"{_settings.mlb_statsapi_base_url}/api/v1/teams"
+        f"?sportId={sport_id}&activeStatus=Y"
+    )
+    httpx_mock.add_response(url=stats_url, json=fixture_data)
+    httpx_mock.add_response(
+        url=_re.compile(r"https://www\.mlbstatic\.com/team-logos/\d+\.svg"),
+        content=svg_fixture_bytes,
+        is_reusable=True,
+    )
+
+    import httpx as _httpx
+
+    async def _run() -> list[Any]:
+        async with _httpx.AsyncClient() as client:
+            provider = _MLBStatsProvider()
+            return await provider.fetch_teams(client, "milb-independent")
+
+    teams = asyncio.run(_run())
+    assert len(teams) == 1
+    team = teams[0]
+    assert team.location == "Florence", (
+        f"Expected fallback to shortName='Florence', got location={team.location!r}"
+    )
+    assert team.slug == "florence-y-alls"

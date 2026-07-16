@@ -47,6 +47,7 @@ from PIL import Image
 
 from ..espn.client import fetch_logo_bytes
 from ..mlb.client import fetch_mlb_teams
+from ..mlb.models import MLBTeamEntry
 from ..mlb.palette import extract_palette
 from ..settings import settings
 from .types import ProviderLogoShield, ProviderTeam
@@ -118,6 +119,22 @@ _COMPLEX_PREFIXES: Final[tuple[str, ...]] = ("DSL ", "ACL ", "FCL ")
 # the _MILB_SPORT_IDS-membership gate still applies upstream).
 _MILB_SHIELD_LIGHT_PATH: Final[str] = "league-on-light/milb.svg"
 _MILB_SHIELD_DARK_PATH: Final[str] = "league-on-dark/milb.svg"
+
+
+def _effective_location_name(entry: MLBTeamEntry) -> str:
+    """Return ``entry.locationName``, falling back to ``shortName`` when absent.
+
+    A small number of MLB Stats API entries (confirmed live 2026-07-16:
+    Florence Y'Alls id=3798, Long Beach Coast id=6490, both milb-independent)
+    omit ``locationName`` entirely — an upstream schema gap.  ``shortName``
+    carries the same city value on every entry observed to be missing
+    ``locationName``, so it is the best available fallback.  As a final,
+    never-crash guard (should never trigger given observed data),
+    ``teamName`` is used so slug/location derivation always has a string.
+    """
+    if entry.locationName is not None:
+        return entry.locationName
+    return entry.shortName if entry.shortName is not None else entry.teamName
 
 
 def _derive_mlb_slug(location_name: str, team_name: str) -> str:
@@ -339,7 +356,7 @@ class MLBStatsProvider:
                 slug = _derive_rookie_slug(tag, entry.teamName)
             else:
                 tag = None
-                slug = _derive_mlb_slug(entry.locationName, entry.teamName)
+                slug = _derive_mlb_slug(_effective_location_name(entry), entry.teamName)
 
             if slug in seen_slugs:
                 await logger.awarning(
@@ -403,7 +420,7 @@ class MLBStatsProvider:
                     display_name=entry.name,
                     abbreviation=entry.abbreviation,
                     short_display_name=entry.teamName,  # mascot (Pitfall 7)
-                    location=entry.locationName,
+                    location=_effective_location_name(entry),
                     name=entry.teamName,  # mascot (Pitfall 7)
                     primary_color=primary_color,  # D-20: palette-extracted bare hex
                     secondary_color=secondary_color,
